@@ -1,0 +1,24 @@
+[package]
+name = "ferroload-py"
+version = "0.13.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Python bindings (PyO3) for the Ferroload dataset format core."
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+# Enables in-Rust video decode via ffmpeg (requires system ffmpeg + pkg-config +
+# clang on the build machine). Build with: maturin develop --release --features video
+video = ["ferroload-codec/video-ffmpeg"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+ferroload-core = { path = "../ferroload-core" }
+ferroload-codec = { path = "../ferroload-codec" }
+numpy = "0.22"
+rayon = "1"
+serde_json = "1"

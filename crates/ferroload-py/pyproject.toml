@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ferroload"
+requires-python = ">=3.9"
+description = "A pure-Rust multimodal dataset format + dataloader for PyTorch."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Midhun" }]
+keywords = [
+    "pytorch", "dataloader", "dataset", "multimodal", "rust",
+    "machine-learning", "computer-vision", "video", "audio",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+]
+# `version` comes from the crate (Cargo.toml) via maturin.
+dynamic = ["version"]
+
+[project.urls]
+# TODO: set USERNAME to your GitHub org/user.
+Homepage = "https://github.com/USERNAME/ferroload-rs"
+Documentation = "https://USERNAME.github.io/ferroload-rs/"
+Repository = "https://github.com/USERNAME/ferroload-rs"
+Changelog = "https://github.com/USERNAME/ferroload-rs/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+hf = ["datasets>=2.14", "pillow>=9", "huggingface_hub>=0.20"]
+torch = ["torch>=2.0", "numpy>=1.21"]
+
+[project.scripts]
+ferroload = "ferroload.cli:main"
+
+[tool.maturin]
+# Mixed layout: pure-Python package `ferroload/` (with cli + loader submodules)
+# wraps the compiled extension, which lands at `ferroload/_core`.
+python-source = "python"
+module-name = "ferroload._core"
+# NOTE: do NOT enable `strip` on macOS arm64 — stripping invalidates the
+# linker's ad-hoc code signature and makes dlopen hang on AMFI/Gatekeeper.

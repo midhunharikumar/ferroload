@@ -1,0 +1,22 @@
+[package]
+name = "ferroload-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Storage layer for Ferroload: object_store-backed S3/GCS/Azure/local + content-addressed local cache."
+
+[features]
+default = []
+# Cloud backends pull TLS/HTTP stacks; opt in when targeting object storage.
+aws = ["object_store/aws"]
+gcp = ["object_store/gcp"]
+azure = ["object_store/azure"]
+
+[dependencies]
+object_store = { version = "0.11", default-features = false }
+bytes = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util"] }
+futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

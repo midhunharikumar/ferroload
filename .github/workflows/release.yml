@@ -1,0 +1,164 @@
+name: release
+
+# Build abi3 wheels with maturin for the supported targets, verify they import on
+# Python 3.9–3.13, and publish to PyPI on a version tag / GitHub Release.
+#
+# Supported targets:
+#   - Linux   x86_64, aarch64   (manylinux)
+#   - macOS   arm64
+#   - Windows x64
+# abi3 (`abi3-py39`) means ONE wheel per target covers CPython 3.9 through 3.13+.
+#
+# Note: the default (no `video` feature) is published — in-Rust video decode needs
+# system ffmpeg and isn't portable in a wheel. Users who want it build from source
+# (`maturin develop --features video`).
+
+on:
+  push:
+    branches: [main]      # build + verify the full matrix on every push to main…
+    tags: ["v*"]          # …and publish on a version tag
+  pull_request:           # …and verify the matrix on PRs (no publish)
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  MANIFEST: crates/ferroload-py/Cargo.toml
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path ${{ env.MANIFEST }}
+          sccache: "true"
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  macos:
+    runs-on: macos-latest   # Apple Silicon -> arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          args: --release --out dist --manifest-path ${{ env.MANIFEST }}
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-aarch64
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          architecture: x64
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x64
+          args: --release --out dist --manifest-path ${{ env.MANIFEST }}
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x64
+          path: dist
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path ${{ env.MANIFEST }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  # Prove the abi3 wheels actually import on Python 3.9–3.13, on each OS's native
+  # arch (cross-built Linux aarch64 is build-verified only — see note below).
+  test:
+    name: import py${{ matrix.python-version }} (${{ matrix.os }})
+    needs: [linux, macos, windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Select native-arch wheel artifact
+        id: art
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)  echo "name=wheels-linux-x86_64"  >> "$GITHUB_OUTPUT" ;;
+            macos-latest)   echo "name=wheels-macos-aarch64" >> "$GITHUB_OUTPUT" ;;
+            windows-latest) echo "name=wheels-windows-x64"   >> "$GITHUB_OUTPUT" ;;
+          esac
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.art.outputs.name }}
+          path: dist
+      - name: Install wheel + import
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --force-reinstall --no-index --find-links dist ferroload
+          python -c "import ferroload; print('import ok', ferroload.__version__)"
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [linux, macos, windows, sdist, test]
+    # Only publish for tags or published releases — never on PR / push-to-main.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ferroload/
+    permissions:
+      id-token: write          # PyPI Trusted Publishing (OIDC) — no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # To use an API token instead of Trusted Publishing, drop the
+          # `id-token: write` permission above and set:
+          #   password: ${{ secrets.PYPI_API_TOKEN }}

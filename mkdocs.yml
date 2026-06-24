@@ -1,0 +1,69 @@
+site_name: Ferroload
+site_description: A pure-Rust multimodal dataset format + dataloader for PyTorch
+# TODO: set these to your GitHub org/user once the repo is public.
+site_url: https://USERNAME.github.io/ferroload-rs/
+repo_url: https://github.com/USERNAME/ferroload-rs
+repo_name: ferroload-rs
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.instant
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - include-markdown
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Python:
+      - Quickstart: python/quickstart.md
+      - API Reference: python/api.md
+  - Rust core:
+      - Usage: rust/usage.md
+      - Worked example: rust/examples.md
+  - Benchmarks: benchmarks.md
+  - Changelog: changelog.md

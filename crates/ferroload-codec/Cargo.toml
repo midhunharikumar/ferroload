@@ -1,0 +1,19 @@
+[package]
+name = "ferroload-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Modality decoders for Ferroload: image (pure-Rust), audio WAV (pure-Rust), video (ffmpeg/NVDEC, feature-gated)."
+
+[features]
+default = ["image-codec", "audio-codec"]
+image-codec = ["dep:image"]
+audio-codec = []                        # pure-Rust WAV PCM, no extra deps
+# Video decode links system ffmpeg (libav) / NVDEC and needs clang+pkg-config;
+# not buildable in every environment, so it is strictly opt-in.
+video-ffmpeg = ["dep:ffmpeg-next"]
+video-nvdec = ["video-ffmpeg"]
+
+[dependencies]
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+ffmpeg-next = { version = "7", optional = true }

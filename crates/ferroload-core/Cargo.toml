@@ -1,0 +1,18 @@
+[package]
+name = "ferroload-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust format core for the Ferroload multimodal dataset format: manifest, tar shards + side-index, index, versioning, extensions."
+
+[features]
+default = []
+# Production index backend; off by default so the test suite stays light.
+# When enabled, the parquet-backed IndexBackend is compiled in.
+parquet = ["dep:arrow", "dep:parquet"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+arrow = { version = "53", optional = true, default-features = false }
+parquet = { version = "53", optional = true, default-features = false, features = ["arrow"] }

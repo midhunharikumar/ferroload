@@ -1,0 +1,54 @@
+# ===== Rust =====
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+# Keep Cargo.lock committed for reproducible builds (it's a workspace with bins).
+
+# ===== Python / maturin =====
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+build/
+dist/
+wheels/
+**/wheels/
+pip-wheel-metadata/
+
+# Compiled extension artifacts (maturin develop drops _core here)
+*.so
+*.dylib
+*.pyd
+crates/ferroload-py/python/ferroload/_core*
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# ===== Ferroload runtime / scratch =====
+# Local dataset catalog + cache if created inside the repo
+.ferroload/
+ferroload-cache/
+*.ferro-target/
+
+# ===== Docs (MkDocs) =====
+/site/
+.cache/
+
+# ===== Editors / OS =====
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.git_broken/
