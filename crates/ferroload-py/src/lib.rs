@@ -21,6 +21,23 @@ fn err<E: std::fmt::Display>(e: E) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
+/// True if `root` is a supported object-store URL (vs a local path).
+fn looks_remote(root: &str) -> bool {
+    matches!(
+        root.split_once("://"),
+        Some((scheme, _))
+            if matches!(scheme, "s3" | "gs" | "az" | "azure" | "abfs" | "file" | "memory" | "mem")
+    )
+}
+
+/// Default local cache dir for remote shard reads: `$FERROLOAD_CACHE` or a temp dir.
+#[cfg(feature = "remote")]
+fn default_cache_dir() -> std::path::PathBuf {
+    std::env::var_os("FERROLOAD_CACHE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("ferroload-cache"))
+}
+
 /// Map a core error to the most appropriate Python exception type.
 fn core_err(e: ferroload_core::Error) -> PyErr {
     use ferroload_core::Error as E;
@@ -209,8 +226,32 @@ struct FerroDataset {
 
 #[pymethods]
 impl FerroDataset {
+    /// Open a dataset by local path or remote URL. A URL (`s3://`, `gs://`,
+    /// `az://`, `file://`, `memory://`) streams shards via ranged GETs through a
+    /// local cache at `cache_dir` (default: `$FERROLOAD_CACHE` or a temp dir).
+    /// Remote support needs a build with `--features aws` (or `gcp`/`azure`).
     #[staticmethod]
-    fn open(root: &str) -> PyResult<Self> {
+    #[pyo3(signature = (root, cache_dir=None))]
+    fn open(root: &str, cache_dir: Option<&str>) -> PyResult<Self> {
+        if looks_remote(root) {
+            #[cfg(feature = "remote")]
+            {
+                let cache = cache_dir
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(default_cache_dir);
+                return Ok(FerroDataset {
+                    inner: Dataset::open_url(root, cache).map_err(core_err)?,
+                });
+            }
+            #[cfg(not(feature = "remote"))]
+            {
+                let _ = cache_dir;
+                return Err(err(format!(
+                    "'{root}' is a remote URL, but this build has no cloud support; \
+                     rebuild with --features aws (or gcp/azure)"
+                )));
+            }
+        }
         Ok(FerroDataset {
             inner: Dataset::open(root).map_err(core_err)?,
         })
@@ -320,14 +361,17 @@ impl FerroDataset {
     #[pyo3(signature = (indices, modality="image"))]
     fn read_many(&self, py: Python<'_>, indices: Vec<usize>, modality: &str) -> PyResult<PyObject> {
         let modality = modality.to_string();
-        let blobs: Result<Vec<Option<Vec<u8>>>, _> =
-            py.allow_threads(|| indices.iter().map(|&i| self.inner.read_blob(i, &modality)).collect());
-        let blobs = blobs.map_err(core_err)?;
+        // Coalesced fetch (one `get_ranges` per shard for remote) instead of a
+        // per-sample GET; zero-length span => absent => None.
+        let (buf, spans) = py
+            .allow_threads(|| self.inner.read_blobs_contig(&indices, &modality))
+            .map_err(core_err)?;
         let list = PyList::empty_bound(py);
-        for b in blobs {
-            match b {
-                Some(b) => list.append(PyBytes::new_bound(py, &b))?,
-                None => list.append(py.None())?,
+        for (off, len) in spans {
+            if len == 0 {
+                list.append(py.None())?;
+            } else {
+                list.append(PyBytes::new_bound(py, &buf[off..off + len]))?;
             }
         }
         Ok(list.into())
@@ -370,26 +414,31 @@ impl FerroDataset {
 
         check_resize(resize)?;
         let modality = modality.to_string();
-        // absent modality -> None entry (tolerant, for sparse/flexible combos)
+        // One COALESCED fetch for the whole batch (per-shard `get_ranges` for
+        // remote — few round trips instead of one GET per sample), then decode the
+        // spans in parallel. Absent modality -> zero-length span -> None entry.
         let decoded: Result<Vec<Option<(usize, usize, usize, Vec<u8>)>>, String> =
             py.allow_threads(|| {
-                indices
+                let (buf, spans) = self
+                    .inner
+                    .read_blobs_contig(&indices, &modality)
+                    .map_err(|e| e.to_string())?;
+                spans
                     .par_iter()
-                    .map(|&i| {
-                        match self.inner.read_blob(i, &modality).map_err(|e| e.to_string())? {
-                            Some(bytes) => {
-                                let t = match resize {
-                                    Some((h, w)) => ImageCodec.decode_resized(&bytes, h, w),
-                                    None => ImageCodec.decode(&bytes),
-                                }
-                                .map_err(|e| e.to_string())?;
-                                let (h, w, c) = (t.shape[0], t.shape[1], t.shape[2]);
-                                match t.data {
-                                    TensorData::U8(v) => Ok(Some((h, w, c, v))),
-                                    _ => Err("expected u8 image".to_string()),
-                                }
-                            }
-                            None => Ok(None),
+                    .map(|&(off, len)| {
+                        if len == 0 {
+                            return Ok(None); // absent modality (zero I/O)
+                        }
+                        let bytes = &buf[off..off + len];
+                        let t = match resize {
+                            Some((h, w)) => ImageCodec.decode_resized(bytes, h, w),
+                            None => ImageCodec.decode(bytes),
+                        }
+                        .map_err(|e| e.to_string())?;
+                        let (h, w, c) = (t.shape[0], t.shape[1], t.shape[2]);
+                        match t.data {
+                            TensorData::U8(v) => Ok(Some((h, w, c, v))),
+                            _ => Err("expected u8 image".to_string()),
                         }
                     })
                     .collect()

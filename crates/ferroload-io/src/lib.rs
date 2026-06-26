@@ -14,12 +14,35 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub mod cache;
 pub use cache::CachedStorage;
 
 pub type IoResult<T> = std::result::Result<T, object_store::Error>;
+
+fn generic(msg: impl Into<String>) -> object_store::Error {
+    let s: String = msg.into();
+    object_store::Error::Generic {
+        store: "ferroload-io",
+        source: s.into(),
+    }
+}
+
+/// A process-wide multi-thread Tokio runtime used to drive `object_store`'s async
+/// reads from Ferroload's **synchronous** (GIL-released) read path. The runtime's
+/// own worker threads do the network I/O, so blocking on it from a rayon/decoder
+/// thread never touches the Python GIL.
+pub fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("ferroload-io")
+            .build()
+            .expect("build ferroload-io tokio runtime")
+    })
+}
 
 /// A thin handle over an `ObjectStore` with the reads/writes Ferroload needs.
 #[derive(Clone)]
@@ -55,6 +78,20 @@ impl Storage {
         Ok(())
     }
 
+    /// Multipart upload in `part_size` chunks — for large objects that a single
+    /// PUT would time out on. Parts are uploaded sequentially.
+    pub async fn put_chunked(&self, path: &str, data: &[u8], part_size: usize) -> IoResult<()> {
+        let mut mp = self.store.put_multipart(&OsPath::from(path)).await?;
+        let mut off = 0;
+        while off < data.len() {
+            let end = (off + part_size).min(data.len());
+            mp.put_part(PutPayload::from(data[off..end].to_vec())).await?;
+            off = end;
+        }
+        mp.complete().await?;
+        Ok(())
+    }
+
     /// Full object.
     pub async fn get(&self, path: &str) -> IoResult<Bytes> {
         self.store.get(&OsPath::from(path)).await?.bytes().await
@@ -77,6 +114,95 @@ impl Storage {
 
     pub async fn exists(&self, path: &str) -> bool {
         self.store.head(&OsPath::from(path)).await.is_ok()
+    }
+
+    /// Object size in bytes (a HEAD). Needed to locate a Parquet footer for
+    /// ranged column reads.
+    pub async fn size(&self, path: &str) -> IoResult<u64> {
+        Ok(self.store.head(&OsPath::from(path)).await?.size as u64)
+    }
+
+    /// One directory level under `prefix`: `(common-prefixes, (object, size))`.
+    /// Encapsulates `object_store` types so callers stay backend-agnostic.
+    pub async fn list_dir(&self, prefix: &str) -> IoResult<(Vec<String>, Vec<(String, u64)>)> {
+        let p = if prefix.is_empty() { None } else { Some(OsPath::from(prefix)) };
+        let res = self.store.list_with_delimiter(p.as_ref()).await?;
+        let prefixes = res.common_prefixes.iter().map(|p| p.to_string()).collect();
+        let objs = res.objects.iter().map(|o| (o.location.to_string(), o.size as u64)).collect();
+        Ok((prefixes, objs))
+    }
+
+    /// Build a `Storage` from a URL and return it plus the **in-store key prefix**
+    /// for the dataset root (everything after the bucket/container). Credentials
+    /// and region come from the environment (the standard `AWS_*` / `GOOGLE_*` /
+    /// `AZURE_*` variables), so callers don't pass secrets.
+    ///
+    /// Schemes: `file://…`, `memory://`, and (feature-gated) `s3://bucket/prefix`,
+    /// `gs://bucket/prefix`, `az://container/prefix`.
+    pub fn from_url(url_str: &str) -> IoResult<(Self, String)> {
+        let u = url::Url::parse(url_str)
+            .map_err(|e| generic(format!("bad url {url_str:?}: {e}")))?;
+        let path = u.path().trim_matches('/').to_string();
+        let missing = || generic(format!("{url_str:?} has no bucket/container"));
+        // For object stores rooted at a bucket/container, the URL path is the
+        // in-store key prefix. For a local FS we root the store at the path itself,
+        // so keys are relative and the prefix is empty.
+        let (store, prefix): (Arc<dyn ObjectStore>, String) = match u.scheme() {
+            "file" => (
+                Arc::new(object_store::local::LocalFileSystem::new_with_prefix(u.path())?),
+                String::new(),
+            ),
+            "memory" | "mem" => (Arc::new(object_store::memory::InMemory::new()), path),
+            #[cfg(feature = "aws")]
+            "s3" => (
+                Arc::new(
+                    object_store::aws::AmazonS3Builder::from_env()
+                        .with_bucket_name(u.host_str().ok_or_else(missing)?)
+                        .build()?,
+                ),
+                path,
+            ),
+            #[cfg(feature = "gcp")]
+            "gs" => (
+                Arc::new(
+                    object_store::gcp::GoogleCloudStorageBuilder::from_env()
+                        .with_bucket_name(u.host_str().ok_or_else(missing)?)
+                        .build()?,
+                ),
+                path,
+            ),
+            #[cfg(feature = "azure")]
+            "az" | "azure" | "abfs" => (
+                Arc::new(
+                    object_store::azure::MicrosoftAzureBuilder::from_env()
+                        .with_container_name(u.host_str().ok_or_else(missing)?)
+                        .build()?,
+                ),
+                path,
+            ),
+            other => {
+                return Err(generic(format!(
+                    "unsupported or disabled scheme {other:?} (build with the \
+                     aws/gcp/azure feature to enable cloud backends)"
+                )))
+            }
+        };
+        Ok((Storage { store }, prefix))
+    }
+
+    /// Blocking full-object read (for small control files: manifest, index).
+    pub fn get_blocking(&self, path: &str) -> IoResult<Bytes> {
+        runtime().block_on(self.get(path))
+    }
+
+    /// Blocking ranged read (drives the async `get_range` on the shared runtime).
+    pub fn get_range_blocking(&self, path: &str, range: Range<u64>) -> IoResult<Bytes> {
+        runtime().block_on(self.get_range(path, range))
+    }
+
+    /// Blocking coalesced multi-range read.
+    pub fn get_ranges_blocking(&self, path: &str, ranges: &[Range<u64>]) -> IoResult<Vec<Bytes>> {
+        runtime().block_on(self.get_ranges(path, ranges))
     }
 }
 

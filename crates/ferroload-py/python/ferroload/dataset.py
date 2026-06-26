@@ -156,8 +156,13 @@ class Dataset:
         self._indices = None if indices is None else [int(x) for x in indices]
 
     @staticmethod
-    def open(root):
-        return Dataset(_CoreDataset.open(root))
+    def open(root, cache_dir=None):
+        """Open a local path or a remote URL (``s3://``, ``gs://``, ``az://``,
+        ``file://``, ``memory://``). For remote URLs, shard bytes stream via ranged
+        GETs through a local cache at ``cache_dir`` (defaults to ``$FERROLOAD_CACHE``
+        or a temp dir). Remote support needs a build with ``--features aws`` (or
+        ``gcp``/``azure``)."""
+        return Dataset(_CoreDataset.open(root, cache_dir))
 
     @property
     def reader(self):
@@ -370,6 +375,17 @@ class Dataset:
 
     def jax(self, **kwargs):
         return FerroTorchDataset(self, out="jax", **kwargs)
+
+    def iterable(self, **kwargs):
+        """Streaming (`IterableDataset`) view over this dataset — the counterpart
+        to `.torch()`/`.numpy()`. Reads contiguous, shard-local blocks sequentially
+        and yields through a shuffle buffer (WebDataset-style), which is the
+        object-store-friendly access pattern. Hand it to a `DataLoader` *without* a
+        sampler. Same `columns=`/`resize=`/`out=` config as the map views, plus
+        `shuffle_buffer=`, `block_size=`, and `world_size`/`rank`/`seed` for DDP.
+        """
+        from .loader import FerroIterableDataset
+        return FerroIterableDataset(self, **kwargs)
 
     # ---- reads (remapped) ----
     def get(self, i, modalities=None):

@@ -14,6 +14,19 @@ default = []
 # Enables in-Rust video decode via ffmpeg (requires system ffmpeg + pkg-config +
 # clang on the build machine). Build with: maturin develop --release --features video
 video = ["ferroload-codec/video-ffmpeg"]
+# Decode JPEG via libjpeg-turbo (faster per-core JPEG). Needs a system
+# libjpeg-turbo at build time (link via pkg-config / TURBOJPEG_SOURCE).
+turbojpeg = ["ferroload-codec/turbojpeg"]
+# Remote object-store datasets: Dataset.open("s3://…"). `remote` enables file://
+# and memory://; add a cloud backend with aws / gcp / azure (pulls TLS/HTTP).
+remote = ["ferroload-core/remote"]
+aws = ["remote", "ferroload-core/aws"]
+gcp = ["remote", "ferroload-core/gcp"]
+azure = ["remote", "ferroload-core/azure"]
+# Build every cloud backend at once (S3 + GCS + Azure). This is what the
+# published wheel and the build/release scripts use, since the cloud backends
+# are pure-Rust (rustls) and portable.
+cloud = ["aws", "gcp", "azure"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }

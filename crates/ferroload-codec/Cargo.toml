@@ -9,6 +9,11 @@ description = "Modality decoders for Ferroload: image (pure-Rust), audio WAV (pu
 default = ["image-codec", "audio-codec"]
 image-codec = ["dep:image"]
 audio-codec = []                        # pure-Rust WAV PCM, no extra deps
+# Decode JPEG via libjpeg-turbo (SIMD C) instead of the pure-Rust zune-jpeg
+# backend the `image` crate uses — faster per-core JPEG decode. Needs a system
+# libjpeg-turbo (link via pkg-config / TURBOJPEG_SOURCE). Off by default to keep
+# the build pure-Rust + portable.
+turbojpeg = ["dep:turbojpeg", "image-codec"]
 # Video decode links system ffmpeg (libav) / NVDEC and needs clang+pkg-config;
 # not buildable in every environment, so it is strictly opt-in.
 video-ffmpeg = ["dep:ffmpeg-next"]
@@ -16,4 +21,5 @@ video-nvdec = ["video-ffmpeg"]
 
 [dependencies]
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+turbojpeg = { version = "1", optional = true }
 ffmpeg-next = { version = "7", optional = true }

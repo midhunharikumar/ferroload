@@ -6,7 +6,7 @@ here, and the PyTorch glue is in `ferroload.loader`.
 from ._core import Writer, Sampler, LayerWriter, __version__
 from . import loader, executor
 from .loader import (
-    FerroTorchDataset, subset_dataset,
+    FerroTorchDataset, FerroIterableDataset, subset_dataset,
     FerroSampler, PrefetchLoader, batched, numpy_collate,
     FerroLoader, make_loader,
 )
@@ -24,7 +24,7 @@ FerroWriter = Writer
 __all__ = [
     "Dataset", "Writer", "FerroDataset", "FerroWriter", "Sampler", "LayerWriter",
     "Modality", "Annotation",
-    "FerroTorchDataset", "subset_dataset",
+    "FerroTorchDataset", "FerroIterableDataset", "subset_dataset",
     "FerroSampler", "PrefetchLoader", "batched", "numpy_collate",
     "FerroLoader", "make_loader",
     "Topology", "detect_topology", "select_executor", "commit_layer",

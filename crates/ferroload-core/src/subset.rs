@@ -258,6 +258,94 @@ impl Predicate {
         }
         eval(&self.expr, &meta)
     }
+
+    /// Columns this predicate reads — meta keys and `<modality>_present` flags.
+    /// Drives Parquet **column projection** (read only what the query touches).
+    pub fn referenced_columns(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        collect_cols(&self.expr, &mut out);
+        out
+    }
+
+    /// Conservative **row-group pruning** test: returns `false` only when this row
+    /// group provably contains no matching row (so it can be skipped). Never a
+    /// false negative — when unsure it returns `true`.
+    pub fn might_match(&self, stats: &impl RowGroupStats) -> bool {
+        rg_can_match(&self.expr, stats)
+    }
+}
+
+/// Min/max summary of one column within a row group (from Parquet statistics).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColStat {
+    Num { min: f64, max: f64 },
+    Str { min: String, max: String },
+    Bool { min: bool, max: bool },
+    /// No usable stats — never prune on this column.
+    Unknown,
+}
+
+/// Per-row-group statistics, looked up by column name.
+pub trait RowGroupStats {
+    fn col(&self, name: &str) -> ColStat;
+}
+
+fn collect_cols(e: &Expr, out: &mut std::collections::BTreeSet<String>) {
+    match e {
+        Expr::Cmp { col, .. } => {
+            if !col.is_empty() {
+                out.insert(col.clone());
+            }
+        }
+        Expr::Truthy(c) => {
+            out.insert(c.clone());
+        }
+        Expr::Not(a) => collect_cols(a, out),
+        Expr::And(a, b) | Expr::Or(a, b) => {
+            collect_cols(a, out);
+            collect_cols(b, out);
+        }
+    }
+}
+
+/// Could a row group with these stats hold a row matching `e`? Conservative:
+/// `true` whenever it can't be ruled out (AND/OR compose, NOT and presence/bool
+/// never prune).
+fn rg_can_match(e: &Expr, s: &impl RowGroupStats) -> bool {
+    match e {
+        Expr::And(a, b) => rg_can_match(a, s) && rg_can_match(b, s),
+        Expr::Or(a, b) => rg_can_match(a, s) || rg_can_match(b, s),
+        Expr::Not(_) => true,    // can't prove all rows satisfy the inner expr
+        Expr::Truthy(_) => true, // presence / bool truthiness — don't prune
+        Expr::Cmp { col, op, val } => {
+            if op == "const" {
+                return val.as_bool().unwrap_or(false);
+            }
+            match s.col(col) {
+                ColStat::Num { min, max } => match as_f64(val) {
+                    Some(v) => ord_rg_can_match(min, max, op, v),
+                    None => true,
+                },
+                ColStat::Str { min, max } => match val {
+                    Value::String(v) => ord_rg_can_match(min.as_str(), max.as_str(), op, v.as_str()),
+                    _ => true,
+                },
+                ColStat::Bool { .. } | ColStat::Unknown => true,
+            }
+        }
+    }
+}
+
+fn ord_rg_can_match<T: PartialOrd + PartialEq>(min: T, max: T, op: &str, v: T) -> bool {
+    match op {
+        "=" | "==" => v >= min && v <= max,
+        "!=" | "<>" => !(min == max && min == v),
+        "<" => min < v,
+        "<=" => min <= v,
+        ">" => max > v,
+        ">=" => max >= v,
+        _ => true,
+    }
 }
 
 /// Filter rows by a `WHERE` predicate, returning `sample_id`s in ascending order
@@ -332,5 +420,56 @@ mod tests {
         assert!(subset_ids(&data(), "duration_s <").is_err());
         assert!(subset_ids(&data(), "(lang='en'").is_err());
         assert!(subset_ids(&data(), "").is_err());
+    }
+
+    #[test]
+    fn referenced_columns_collected() {
+        let p = Predicate::parse("duration_s < 15 AND lang = 'en' AND depth_present").unwrap();
+        let cols = p.referenced_columns();
+        assert!(cols.contains("duration_s"));
+        assert!(cols.contains("lang"));
+        assert!(cols.contains("depth_present"));
+        assert_eq!(cols.len(), 3);
+    }
+
+    /// Mock row-group stats for pruning tests.
+    struct Stats(std::collections::HashMap<String, ColStat>);
+    impl RowGroupStats for Stats {
+        fn col(&self, name: &str) -> ColStat {
+            self.0.get(name).cloned().unwrap_or(ColStat::Unknown)
+        }
+    }
+    fn stats(pairs: &[(&str, ColStat)]) -> Stats {
+        Stats(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    }
+
+    #[test]
+    fn row_group_pruning_is_conservative_and_correct() {
+        // numeric range: a group with width in [10,50] can't satisfy width >= 80
+        let s = stats(&[("width", ColStat::Num { min: 10.0, max: 50.0 })]);
+        assert!(!Predicate::parse("width >= 80").unwrap().might_match(&s));
+        assert!(Predicate::parse("width >= 40").unwrap().might_match(&s));
+        assert!(!Predicate::parse("width = 99").unwrap().might_match(&s));
+        assert!(Predicate::parse("width = 25").unwrap().might_match(&s));
+
+        // string equality outside [min,max] is impossible
+        let s = stats(&[("lang", ColStat::Str { min: "de".into(), max: "fr".into() })]);
+        assert!(!Predicate::parse("lang = 'zh'").unwrap().might_match(&s));
+        assert!(Predicate::parse("lang = 'en'").unwrap().might_match(&s));
+
+        // AND prunes if either side is impossible; OR needs both impossible
+        let s = stats(&[
+            ("width", ColStat::Num { min: 10.0, max: 50.0 }),
+            ("h", ColStat::Num { min: 0.0, max: 100.0 }),
+        ]);
+        assert!(!Predicate::parse("width >= 80 AND h < 100").unwrap().might_match(&s));
+        assert!(Predicate::parse("width >= 80 OR h < 100").unwrap().might_match(&s));
+
+        // unknown stats / NOT / presence never prune (conservative)
+        let empty = stats(&[]);
+        assert!(Predicate::parse("width >= 80").unwrap().might_match(&empty));
+        let s = stats(&[("width", ColStat::Num { min: 10.0, max: 50.0 })]);
+        assert!(Predicate::parse("NOT width >= 80").unwrap().might_match(&s));
+        assert!(Predicate::parse("depth_present").unwrap().might_match(&empty));
     }
 }
