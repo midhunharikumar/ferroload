@@ -35,15 +35,20 @@ recommended in-process path: all cores, no worker processes, no IPC):
   DataLoader at nw=8 it does **164k samp/s — 1.8× HF, 3.9× WebDataset** (native
   191k). When the cost is per-sample overhead, in-process decode crushes
   multiprocessing; this is not an artifact of "native vs workers".
-- **JPEG decode-bound (Cars / FFHQ): roughly a tie with HF, behind WebDataset.**
-  At equal parallelism Ferroload (~4.7–5.1k) is ~on par with HF (slightly behind)
-  and below WebDataset (~8–9.5k, sequential tar streaming). Ferroload **native**
-  (~6.3–6.5k) beats HF nw=8 — but that edge is **avoiding multiprocessing IPC**
-  (its DataLoader run is ~30% slower than native), not faster per-core decode. The
-  `turbojpeg` codec brings the per-core JPEG decode up to ≈ PIL/libjpeg-turbo.
+- **JPEG decode-bound (Cars / FFHQ): Ferroload native now leads.** After adding
+  **`fast_image_resize`** (SIMD resize) on top of `turbojpeg`, Ferroload native
+  (~10k cars / ~9.6k FFHQ) **beats WebDataset nw=8** (9.5k / 8.1k) and HF nw=8 from a
+  **single process** — and even the pure-Rust default (zune + SIMD resize) beats HF
+  nw=8. The earlier loss was the *resize* step (scalar `image` crate), not decode:
+  HF/PIL were winning on Pillow's C resize + libjpeg-turbo. (`fast_image_resize` is
+  pure-Rust, cross-platform NEON/AVX2.)
+  - **But in the *same* worker `DataLoader(nw=8)`, Ferroload stays ~5.5k** (≈ HF,
+    behind WebDataset) — that path is **IPC-bound** (moving decoded tensors
+    worker→main), so the decode/resize win only lands in the **native** in-process
+    path. **Takeaway: run Ferroload native, not wrapped in a worker DataLoader.**
 
-  **Takeaway: run Ferroload native (don't wrap it in a worker DataLoader);** its
-  real wins are tiny-image throughput, storage, and remote streaming below.
+  See [benchmarks/DECODE_OPTIMIZATION.md](benchmarks/DECODE_OPTIMIZATION.md) for the
+  decode research + measured speedups.
 
 ## Storage footprint
 

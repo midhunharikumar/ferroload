@@ -160,8 +160,24 @@ in-process path: all cores via rayon, no worker processes, no IPC). Same machine
 | dataset | HF (nw=8) | WebDataset (nw=8) | **Ferroload, same DataLoader (nw=8)** | Ferroload native |
 |---|--:|--:|--:|--:|
 | CIFAR-10 | 89,905 | 41,700 | **164,072** | 191,513 |
-| Stanford-Cars | 5,927 | 9,519 | **5,064** | 6,541 |
-| FFHQ-256 | 4,887 | 8,148 | **4,682** | 6,335 |
+| Stanford-Cars | 5,927 | 9,519 | **5,508** | 10,005 |
+| FFHQ-256 | 4,887 | 8,148 | **5,703** | 9,634 |
+
+*(JPEG numbers above are after the `fast_image_resize` + `turbojpeg` work — see §4b.
+Native now beats WebDataset nw=8 on JPEG; the same-DataLoader column barely moved
+because that path is IPC-bound, not decode-bound.)*
+
+### 4b. `fast_image_resize` — the resize was the hidden JPEG bottleneck
+
+`decode_resized` was decoding with libjpeg-turbo but resizing with the scalar
+`image::imageops::resize`. Swapping that for **`fast_image_resize`** (NEON on ARM,
+AVX2 on x86) lifted `ferro_native` JPEG throughput **+45–57%** (Stanford-Cars
+6,356→~10,000; FFHQ 6,139→~9,600) — the resize was ~35% of `decode_resized`. Even
+the **pure-Rust default (zune-jpeg + fast_image_resize) beats HF nw=8** (cars ~7,900,
+FFHQ ~7,600). This confirmed HF's earlier edge was Pillow's libjpeg-turbo decode **+
+C resize**, not a better decoder — Ferroload was losing on the resize step. Pure-Rust,
+cross-platform (no new C dep), helps both decoders. Full analysis + remaining ideas
+(decode-at-scale, GPU decode): [DECODE_OPTIMIZATION.md](DECODE_OPTIMIZATION.md).
 
 **What the controlled comparison actually shows:**
 - **CIFAR-10 (overhead-bound): Ferroload wins every framing.** Even in the *same*

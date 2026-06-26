@@ -36,8 +36,8 @@ def chart_throughput():
     datasets = ["CIFAR-10\n(32px PNG)", "Stanford-Cars\n(JPEG→224)", "FFHQ-256\n(JPEG→224)"]
     hf = [89905, 5927, 4887]            # nw=8
     wds = [41700, 9519, 8148]           # nw=8
-    ferro_dl = [164072, 5064, 4682]     # nw=8, same harness, RAYON_NUM_THREADS=1
-    ferro_nat = [191513, 6541, 6335]    # native (1 process, all cores, no IPC)
+    ferro_dl = [164072, 5508, 5703]     # nw=8, same harness, RAYON_NUM_THREADS=1 (turbojpeg+fir)
+    ferro_nat = [191513, 10005, 9634]   # native (1 process, no IPC, turbojpeg + fast_image_resize)
     x = np.arange(len(datasets)); w = 0.2
     fig, ax = plt.subplots(figsize=(9.2, 4.8))
     bars = [
@@ -93,21 +93,23 @@ def chart_gcs():
 
 
 def chart_jpeg():
+    # Ferroload native (1 process), before vs after fast_image_resize (SIMD resize),
+    # against HF/WDS at nw=8. Shows the resize was the JPEG bottleneck.
     datasets = ["Stanford-Cars", "FFHQ-256"]
-    ferro_zune = [5359, 5223]     # native, controlled before/after the codec swap
-    ferro_turbo = [6356, 6139]
-    hf_best = [5927, 4887]        # nw=8, same session
-    wds_best = [9519, 8148]       # nw=8, same session
+    ferro_before = [6356, 6139]   # turbojpeg + image-crate (scalar) resize
+    ferro_after = [10005, 9634]   # turbojpeg + fast_image_resize (SIMD)
+    hf_best = [5927, 4887]        # nw=8
+    wds_best = [9519, 8148]       # nw=8
     x = np.arange(len(datasets)); w = 0.2
-    fig, ax = plt.subplots(figsize=(8.2, 4.6))
-    ax.bar(x - 1.5 * w, ferro_zune, w, label="Ferroload (zune-jpeg)", color=FERRO2)
-    b2 = ax.bar(x - 0.5 * w, ferro_turbo, w, label="Ferroload (turbojpeg)", color=FERRO)
-    ax.bar(x + 0.5 * w, hf_best, w, label="HF Arrow (best)", color=HF)
-    ax.bar(x + 1.5 * w, wds_best, w, label="WebDataset (best)", color=WDS)
+    fig, ax = plt.subplots(figsize=(8.6, 4.7))
+    ax.bar(x - 1.5 * w, ferro_before, w, label="Ferroload native — scalar resize (before)", color=FERRO2)
+    b2 = ax.bar(x - 0.5 * w, ferro_after, w, label="Ferroload native — SIMD resize (after)", color=FERRO)
+    ax.bar(x + 0.5 * w, hf_best, w, label="HF Arrow (nw=8)", color=HF)
+    ax.bar(x + 1.5 * w, wds_best, w, label="WebDataset (nw=8)", color=WDS)
     ax.set_ylabel("samples / s  (higher = better)")
-    ax.set_title("JPEG decode-bound throughput (1 process for Ferroload)")
+    ax.set_title("JPEG decode-bound — fast_image_resize lifts Ferroload native past WebDataset")
     ax.set_xticks(x); ax.set_xticklabels(datasets)
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=8.5)
     _labels(ax, b2, "{:.0f}")
     fig.tight_layout(); fig.savefig(f"{OUT}/jpeg_decode.png"); plt.close(fig)
 

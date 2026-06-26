@@ -72,9 +72,9 @@ in **[BENCHMARKS.md](BENCHMARKS.md)**.
 
 - **Tiny images:** Ferroload wins apples-to-apples — even in the *same*
   `DataLoader(nw=8)` it's **1.8× HF, 3.9× WebDataset** (no multiprocessing tax).
-- **JPEG decode-bound:** at equal workers Ferroload is ~on par with HF (slightly
-  behind) and behind WebDataset; its native in-process path beats HF nw=8 by
-  avoiding multiprocessing IPC, not by faster decode.
+- **JPEG decode-bound:** Ferroload **native** (libjpeg-turbo + SIMD `fast_image_resize`)
+  now beats WebDataset nw=8 from one process; even the pure-Rust default beats HF
+  nw=8. (In a worker `DataLoader` it's IPC-bound, ~on par with HF — run native.)
 - **GCS streaming:** **8.9× faster** after coalescing remote reads — now ahead of
   WebDataset, while keeping random access + a DuckDB-queryable index.
 - **Storage:** always smaller than WebDataset (≈2× for tiny images).

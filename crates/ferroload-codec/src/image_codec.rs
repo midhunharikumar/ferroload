@@ -21,43 +21,53 @@ fn jpeg_turbo_rgb(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     Ok((img.width as u32, img.height as u32, img.pixels))
 }
 
-impl ImageCodec {
-    /// Decode and resize to exactly `(h, w)` (RGB). Used for collation into a
-    /// uniform `[B,H,W,3]` batch (resize-on-decode avoids full-res then shrink).
-    pub fn decode_resized(&self, bytes: &[u8], h: usize, w: usize) -> Result<Tensor> {
-        #[cfg(feature = "turbojpeg")]
-        if is_jpeg(bytes) {
-            let (sw, sh, rgb) = jpeg_turbo_rgb(bytes)?;
-            let src = image::RgbImage::from_raw(sw, sh, rgb)
-                .ok_or_else(|| CodecError::Decode("turbojpeg buffer".into()))?;
-            let dst = image::imageops::resize(
-                &src, w as u32, h as u32, image::imageops::FilterType::Triangle,
-            );
-            return Ok(Tensor { shape: vec![h, w, 3], data: TensorData::U8(dst.into_raw()) });
-        }
-        let img = image::load_from_memory(bytes)
-            .map_err(|e| CodecError::Decode(format!("image: {e}")))?;
-        let img = img.resize_exact(w as u32, h as u32, image::imageops::FilterType::Triangle);
-        let data = img.to_rgb8().into_raw();
-        Ok(Tensor {
-            shape: vec![h, w, 3],
-            data: TensorData::U8(data),
-        })
-    }
+/// SIMD resize of an RGB8 buffer to `(dw, dh)` via `fast_image_resize` (AVX2 on
+/// x86, NEON on ARM — auto-detected). Bilinear, to match the prior behavior.
+fn fir_resize_rgb(sw: u32, sh: u32, rgb: Vec<u8>, dw: u32, dh: u32) -> Result<Vec<u8>> {
+    use fast_image_resize::images::Image as FirImage;
+    use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+
+    let src = FirImage::from_vec_u8(sw, sh, rgb, PixelType::U8x3)
+        .map_err(|e| CodecError::Decode(format!("fir src: {e}")))?;
+    let mut dst = FirImage::new(dw, dh, PixelType::U8x3);
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Bilinear));
+    Resizer::new()
+        .resize(&src, &mut dst, &opts)
+        .map_err(|e| CodecError::Decode(format!("fir resize: {e}")))?;
+    Ok(dst.into_vec())
 }
 
-impl Codec for ImageCodec {
-    fn decode(&self, bytes: &[u8]) -> Result<Tensor> {
+impl ImageCodec {
+    /// Decode to full-res RGB8 `(w, h, bytes)`. JPEG via libjpeg-turbo under the
+    /// `turbojpeg` feature, else via the `image` crate (zune-jpeg / png).
+    fn decode_rgb(&self, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
         #[cfg(feature = "turbojpeg")]
         if is_jpeg(bytes) {
-            let (w, h, data) = jpeg_turbo_rgb(bytes)?;
-            return Ok(Tensor { shape: vec![h as usize, w as usize, 3], data: TensorData::U8(data) });
+            return jpeg_turbo_rgb(bytes);
         }
         let img = image::load_from_memory(bytes)
             .map_err(|e| CodecError::Decode(format!("image: {e}")))?
             .to_rgb8();
         let (w, h) = img.dimensions();
-        let data = img.into_raw(); // row-major RGB, len = h*w*3
+        Ok((w, h, img.into_raw()))
+    }
+
+    /// Decode and resize to exactly `(h, w)` (RGB). Used for collation into a
+    /// uniform `[B,H,W,3]` batch. Decode (libjpeg-turbo/zune) + **SIMD resize**.
+    pub fn decode_resized(&self, bytes: &[u8], h: usize, w: usize) -> Result<Tensor> {
+        let (sw, sh, rgb) = self.decode_rgb(bytes)?;
+        let data = if sw == w as u32 && sh == h as u32 {
+            rgb // already target size — skip resize
+        } else {
+            fir_resize_rgb(sw, sh, rgb, w as u32, h as u32)?
+        };
+        Ok(Tensor { shape: vec![h, w, 3], data: TensorData::U8(data) })
+    }
+}
+
+impl Codec for ImageCodec {
+    fn decode(&self, bytes: &[u8]) -> Result<Tensor> {
+        let (w, h, data) = self.decode_rgb(bytes)?; // row-major RGB, len = h*w*3
         Ok(Tensor {
             shape: vec![h as usize, w as usize, 3],
             data: TensorData::U8(data),
