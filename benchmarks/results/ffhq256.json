@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "name": "ffhq256",
+    "n": 10000,
+    "ext": "jpg",
+    "target": 224,
+    "wds_maxcount": 625,
+    "sizes": {
+      "encoded_raw": 179278808,
+      "hf_arrow": 179476776,
+      "webdataset": 217763840,
+      "ferroload": 187648311
+    }
+  },
+  "results": [
+    {
+      "dataset": "ffhq256",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9600,
+      "seconds": 6.1729,
+      "samples_per_s": 1555.2,
+      "first_batch_s": 0.0882,
+      "peak_rss_mb": 824.4,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9600,
+      "seconds": 6.8687,
+      "samples_per_s": 1397.7,
+      "first_batch_s": 0.1003,
+      "peak_rss_mb": 465.8,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 4,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9600,
+      "seconds": 1.5973,
+      "samples_per_s": 6010.2,
+      "first_batch_s": 0.1389,
+      "peak_rss_mb": 669.7,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 4,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9344,
+      "seconds": 1.6533,
+      "samples_per_s": 5651.9,
+      "first_batch_s": 0.213,
+      "peak_rss_mb": 304.3,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 8,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9600,
+      "seconds": 1.7615,
+      "samples_per_s": 5450.0,
+      "first_batch_s": 0.1677,
+      "peak_rss_mb": 610.4,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 8,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 8832,
+      "seconds": 1.0154,
+      "samples_per_s": 8697.8,
+      "first_batch_s": 0.2626,
+      "peak_rss_mb": 308.0,
+      "notes": ""
+    },
+    {
+      "dataset": "ffhq256",
+      "fmt": "ferroload",
+      "loader": "ferro_native",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 9616,
+      "seconds": 1.8412,
+      "samples_per_s": 5222.7,
+      "first_batch_s": 0.0671,
+      "peak_rss_mb": 572.9,
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "name": "ferroload  (FFHQ gcs)",
+    "first_s": 2.438,
+    "samples_per_s": 1008.3,
+    "n": 3008,
+    "seconds": 2.983
+  },
+  {
+    "name": "webdataset (FFHQ gcs)",
+    "first_s": 1.659,
+    "samples_per_s": 433.7,
+    "n": 3008,
+    "seconds": 6.936
+  },
+  {
+    "name": "ferroload  (laion-pop)",
+    "first_s": 2.372,
+    "samples_per_s": 782.7,
+    "n": 3008,
+    "seconds": 3.843
+  }
+]

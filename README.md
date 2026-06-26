@@ -42,11 +42,11 @@ ferroload-rs/
 | WHERE-clause subsetting | core | implemented | ✅ (DataFusion is the production swap-in) |
 | Enrichment `map` → additive layers (idempotent/resumable) | core + py | implemented | ✅ positional join, typed outputs |
 | Distributed `map`: Local + StaticPartition executors, auto-topology | core + py | implemented | ✅ (Ray executor reserved) |
-| Parquet/Arrow index backend | core (`parquet`) | implemented | ✅ (feature build) |
+| Sharded lazy Parquet/Arrow index (zstd; column projection + row-group pruning; DuckDB-queryable) | core | implemented | ✅ (default format) |
 | object_store storage + ranged reads | io | implemented | ✅ (local + in-memory) |
 | Content-addressed NVMe cache | io | implemented | ✅ |
 | S3 / GCS / Azure backends | io (`aws`/`gcp`/`azure`) | implemented | ⛔ needs cloud creds |
-| Image decode (PNG/JPEG) | codec | implemented | ✅ |
+| Image decode (PNG/JPEG; opt-in libjpeg-turbo via `turbojpeg`) | codec | implemented | ✅ |
 | Audio decode (WAV/PCM) | codec | implemented | ✅ |
 | Temporal frame sampling | codec | implemented | ✅ |
 | Video decode (ffmpeg / NVDEC) | codec (`video-ffmpeg`/`video-nvdec`) | implemented | ⛔ needs system ffmpeg + clang |
@@ -60,6 +60,24 @@ Everything marked ⛔ is real code that is **feature-gated** because this sandbo
 lacks the native libs (ffmpeg/clang) or credentials (cloud); it compiles where
 those are present.
 
+## Performance
+
+Benchmarked 3-way against **WebDataset** and **HF `datasets` (Arrow)** (the loader
+🤗 diffusers training uses) on CIFAR-10, Stanford-Cars, and FFHQ-256, plus GCS
+streaming. All formats are built from the *same encoded image bytes* — full report
+in **[BENCHMARKS.md](BENCHMARKS.md)**.
+
+![Local throughput](benchmarks/charts/throughput.png)
+![GCS streaming](benchmarks/charts/gcs_streaming.png)
+
+- **Tiny images:** Ferroload from a **single process** (129k samp/s) beats HF and
+  WebDataset at 8 workers — no multiprocessing tax.
+- **JPEG decode-bound:** Ferroload (with the opt-in `turbojpeg` codec) matches HF's
+  best multiprocess throughput from one process.
+- **GCS streaming:** **8.9× faster** after coalescing remote reads — now ahead of
+  WebDataset, while keeping random access + a DuckDB-queryable index.
+- **Storage:** always smaller than WebDataset (≈2× for tiny images).
+
 ## Build & test
 
 The mounted output filesystem blocks the temp-file deletes cargo does while
@@ -68,8 +86,8 @@ linking, so point the build target at local disk:
 ```bash
 export CARGO_TARGET_DIR=/tmp/ferro-target
 
-cargo test                                   # core (default) + io + codec
-cargo test -p ferroload-core --features parquet   # + parquet/arrow backend
+cargo test                                   # core (Parquet index is default) + io + codec
+cargo test -p ferroload-core --features remote    # + remote object-store / ranged reads
 cargo run -p ferroload-core --example synthetic_av
 ```
 
