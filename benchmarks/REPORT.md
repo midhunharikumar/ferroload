@@ -19,31 +19,32 @@ All code is in [`benchmarks/`](.); raw numbers in [`results/`](results).
 
 | Regime | Winner | Notes |
 |---|---|---|
-| **Tiny images / overhead-bound** (CIFAR-10, 32px PNG) | **Ferroload** | 129k samp/s from **1 process** > HF @8 workers (96k) > WDS @8 (37k) |
-| **JPEG decode-bound** (Stanford-Cars, FFHQ-256 @224) | **WebDataset @8 workers** | ~8.7–8.9k samp/s; Ferroload native ~5.2–5.4k (1 process), competitive w/ HF |
+| **Tiny images / overhead-bound** (CIFAR-10, 32px PNG) | **Ferroload** | 164k samp/s in the *same* DataLoader(nw=8); 191k native ≫ HF nw=8 (90k) > WDS nw=8 (42k) |
+| **JPEG decode-bound** (Stanford-Cars, FFHQ-256 @224) | **Ferroload native** (after SIMD resize) | native ~10k / ~9.6k > WDS nw=8 (9.5k / 8.1k) > HF; in a *worker* DataLoader it's IPC-bound (~5.5k ≈ HF) — run native |
 | **On-disk size** | **HF Arrow ≈ raw**, then **Ferroload** | Ferroload always smaller than WebDataset (≈2× smaller for tiny images) |
 | **GCS streaming** | **Ferroload** (1008 samp/s, *after fix*) | was 113 (per-sample GETs); now beats WDS (434–510) — see §1b/§6 |
 
 **One-line takeaway:** Ferroload wins decisively on tiny-image throughput (no
 multiprocessing needed), smallest-after-Arrow storage, and unique capabilities
-(O(manifest) open, DuckDB-queryable index, ranged columnar subset). The two gaps
-this benchmark first exposed — per-sample remote reads in the decode path, and the
-Rust JPEG decoder — **have since been fixed** (§1b); after the fixes Ferroload also
-*leads* GCS streaming; on JPEG decode it's ~on par with HF at equal worker counts
-(§4a) — its native path's edge over worker loaders is avoiding multiprocessing IPC.
+(O(manifest) open, DuckDB-queryable index, ranged columnar subset). The gaps this
+benchmark exposed — per-sample remote reads, the JPEG decoder, and (the big one)
+the scalar resize — **have since been fixed** (§1b); after them Ferroload also
+*leads* GCS streaming **and** JPEG decode **from one process** (native). In a
+worker `DataLoader` the JPEG path is IPC-bound (~on par with HF) — so run native.
 
-## 1b. The two gaps — fixed
+## 1b. The gaps — fixed
 
-After the first pass, both fixable Ferroload gaps were implemented and re-measured:
+Each fixable gap the benchmark exposed was implemented and re-measured:
 
 | Fix | What changed | Before | After | Δ |
 |---|---|--:|--:|--:|
-| **Coalesced remote reads** | `decode_many`/`read_many` now issue one coalesced `get_ranges` per shard (via `read_blobs_contig`) instead of one GET per sample | 113 samp/s | **1008 samp/s** | **8.9×** |
-| **libjpeg-turbo decode** | new `turbojpeg` feature: JPEG decoded via libjpeg-turbo (SIMD C) instead of pure-Rust zune-jpeg | cars 5359 / FFHQ 5223 | **6356 / 6139** | **+18%** |
+| **Coalesced remote reads** | `decode_many`/`read_many` issue one coalesced `get_ranges` per shard (via `read_blobs_contig`) instead of one GET per sample | 113 samp/s | **1008 samp/s** | **8.9×** |
+| **libjpeg-turbo decode** | opt-in `turbojpeg` feature: JPEG via libjpeg-turbo (SIMD C) vs pure-Rust zune-jpeg | cars 5359 / FFHQ 5223 | 6356 / 6139 | +18% |
+| **SIMD resize** (`fast_image_resize`) | the resize step (~35% of `decode_resized`) was scalar `image::imageops::resize` → NEON/AVX2 resize | cars 6356 / FFHQ 6139 | **~10000 / ~9600** (native) | **+45–57%** |
 
 - **GCS streaming (FFHQ):** Ferroload **113 → 1008 samp/s** and first-batch **7.1 → 2.4 s** — now **2.3× faster than WebDataset** (was 4.5× slower). laion-pop streaming **113 → 783 samp/s**.
-- **Local JPEG decode:** Ferroload native beats HF nw=8 by avoiding multiprocessing IPC, but **apples-to-apples in the same DataLoader at nw=8 it's ~on par with HF (slightly behind) and behind WebDataset** (§4a). turbojpeg's +18% lifts the per-core decode to ≈ PIL.
-- Both verified for correctness (`test_map.py`, `test_combinations.py` incl. sparse modalities). The `turbojpeg` feature is opt-in (default build stays pure-Rust); the coalescing fix is unconditional.
+- **Local JPEG decode:** with `turbojpeg` + `fast_image_resize`, Ferroload **native** now **beats WebDataset nw=8** (~10k vs 9.5k cars; ~9.6k vs 8.1k FFHQ) and HF nw=8 — from one process; even the pure-Rust default (zune + SIMD resize) beats HF nw=8. The earlier loss was the *resize*, not decode (HF/PIL bundle libjpeg-turbo + a C resize). In a *worker* `DataLoader(nw=8)` it stays ~5.5k (IPC-bound) — see §4a/§4b.
+- All verified for correctness (`test_map.py`, `test_combinations.py` incl. sparse modalities). `turbojpeg` is opt-in (default build stays pure-Rust); coalescing + SIMD resize are unconditional.
 
 ---
 
@@ -275,11 +276,14 @@ Neither WebDataset nor HF Arrow offers that random-access + queryable-index comb
    now use `read_blobs_contig` (one `get_ranges` per shard block) instead of
    per-sample GETs. GCS streaming **113 → 1008 samp/s (8.9×)**, now beats WebDataset
    (§1b/§6). Unconditional (helps any remote dataset); local path unchanged.
-2. ✅ **DONE — libjpeg-turbo codec.** New opt-in `turbojpeg` feature decodes JPEG via
-   libjpeg-turbo (SIMD C). JPEG decode **+18%** (cars 5359→6356, FFHQ 5223→6139),
-   ≈ PIL per core; apples-to-apples at nw=8 Ferroload is ~on par with HF (§4a).
-   Default build stays pure-Rust.
-3. ⬜ **TODO — Expose `shard_bytes_target` in the Python `Writer`.** The 187 MB single
+2. ✅ **DONE — libjpeg-turbo codec.** Opt-in `turbojpeg` feature decodes JPEG via
+   libjpeg-turbo (SIMD C). JPEG decode +18% over zune-jpeg; default build stays pure-Rust.
+3. ✅ **DONE — SIMD resize (`fast_image_resize`).** The resize step (~35% of
+   `decode_resized`) was scalar `image::imageops::resize`; now NEON/AVX2. Lifts
+   `ferro_native` JPEG **+45–57%** (cars ~10k, FFHQ ~9.6k) — beats WebDataset nw=8
+   from one process (§4b). Pure-Rust, cross-platform, helps both decoders.
+   Remaining decode ideas (decode-at-scale, GPU): [DECODE_OPTIMIZATION.md](DECODE_OPTIMIZATION.md).
+4. ⬜ **TODO — Expose `shard_bytes_target` in the Python `Writer`.** The 187 MB single
    data shard needed multipart upload; smaller shards ease upload + parallel streaming.
 
 **Where Ferroload already wins and the others can't follow:**
