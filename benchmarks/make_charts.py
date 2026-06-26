@@ -30,23 +30,30 @@ def _labels(ax, bars, fmt="{:.0f}"):
 
 
 def chart_throughput():
+    # Apples-to-apples: all loaders at num_workers=8 (Ferroload-DL = same torch
+    # DataLoader harness, 1 decode thread/worker), plus Ferroload native (the
+    # recommended in-process path, no IPC). Same machine session.
     datasets = ["CIFAR-10\n(32px PNG)", "Stanford-Cars\n(JPEG→224)", "FFHQ-256\n(JPEG→224)"]
-    hf = [95879, 6452, 6010]          # best num_workers
-    wds = [37454, 8930, 8698]         # best num_workers
-    ferro = [129051, 6356, 6139]      # native (turbojpeg on JPEG sets)
-    x = np.arange(len(datasets)); w = 0.26
-    fig, ax = plt.subplots(figsize=(8.4, 4.6))
-    b1 = ax.bar(x - w, hf, w, label="HF datasets / Arrow (best workers)", color=HF)
-    b2 = ax.bar(x, wds, w, label="WebDataset (best workers)", color=WDS)
-    b3 = ax.bar(x + w, ferro, w, label="Ferroload (native, 1 process)", color=FERRO)
+    hf = [89905, 5927, 4887]            # nw=8
+    wds = [41700, 9519, 8148]           # nw=8
+    ferro_dl = [164072, 5064, 4682]     # nw=8, same harness, RAYON_NUM_THREADS=1
+    ferro_nat = [191513, 6541, 6335]    # native (1 process, all cores, no IPC)
+    x = np.arange(len(datasets)); w = 0.2
+    fig, ax = plt.subplots(figsize=(9.2, 4.8))
+    bars = [
+        ax.bar(x - 1.5 * w, hf, w, label="HF datasets / Arrow (nw=8)", color=HF),
+        ax.bar(x - 0.5 * w, wds, w, label="WebDataset (nw=8)", color=WDS),
+        ax.bar(x + 0.5 * w, ferro_dl, w, label="Ferroload, same DataLoader (nw=8)", color=FERRO2),
+        ax.bar(x + 1.5 * w, ferro_nat, w, label="Ferroload native (1 process, no IPC)", color=FERRO),
+    ]
     ax.set_yscale("log")
     ax.set_ylabel("samples / s  (log scale, higher = better)")
-    ax.set_title("Local data-loading throughput — best config per loader")
+    ax.set_title("Local throughput — apples-to-apples at num_workers=8 (+ Ferroload native)")
     ax.set_xticks(x); ax.set_xticklabels(datasets)
-    ax.legend(fontsize=9, loc="upper right")
-    for b in (b1, b2, b3):
+    ax.legend(fontsize=8.5, loc="upper right", ncol=2)
+    for b in bars:
         _labels(ax, b)
-    ax.set_ylim(top=max(ferro) * 2.2)
+    ax.set_ylim(top=max(ferro_nat) * 2.6)
     fig.tight_layout(); fig.savefig(f"{OUT}/throughput.png"); plt.close(fig)
 
 
@@ -87,10 +94,10 @@ def chart_gcs():
 
 def chart_jpeg():
     datasets = ["Stanford-Cars", "FFHQ-256"]
-    ferro_zune = [5359, 5223]
+    ferro_zune = [5359, 5223]     # native, controlled before/after the codec swap
     ferro_turbo = [6356, 6139]
-    hf_best = [6452, 6010]
-    wds_best = [8930, 8698]
+    hf_best = [5927, 4887]        # nw=8, same session
+    wds_best = [9519, 8148]       # nw=8, same session
     x = np.arange(len(datasets)); w = 0.2
     fig, ax = plt.subplots(figsize=(8.2, 4.6))
     ax.bar(x - 1.5 * w, ferro_zune, w, label="Ferroload (zune-jpeg)", color=FERRO2)

@@ -21,7 +21,8 @@ import formats
 import loaders
 
 DATA = os.path.join(os.path.dirname(__file__), "bench_data")
-FMT = {"hf_arrow": "hf_arrow", "webdataset": "webdataset", "ferro_native": "ferroload"}
+FMT = {"hf_arrow": "hf_arrow", "webdataset": "webdataset", "ferro_native": "ferroload",
+       "ferro_dl": "ferroload"}
 
 
 def main():
@@ -36,6 +37,8 @@ def main():
         it = loaders.webdataset_loader(formats.wds_shards(os.path.join(base, "wds")), target, bs, nw)
     elif loader == "ferro_native":
         it = loaders.ferroload_native_loader(os.path.join(base, "ferro"), target, bs)
+    elif loader == "ferro_dl":
+        it = loaders.ferroload_dl_loader(os.path.join(base, "ferro"), target, bs, nw)
     else:
         raise ValueError(loader)
 

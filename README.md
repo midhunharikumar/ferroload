@@ -70,10 +70,11 @@ in **[BENCHMARKS.md](BENCHMARKS.md)**.
 ![Local throughput](benchmarks/charts/throughput.png)
 ![GCS streaming](benchmarks/charts/gcs_streaming.png)
 
-- **Tiny images:** Ferroload from a **single process** (129k samp/s) beats HF and
-  WebDataset at 8 workers — no multiprocessing tax.
-- **JPEG decode-bound:** Ferroload (with the opt-in `turbojpeg` codec) matches HF's
-  best multiprocess throughput from one process.
+- **Tiny images:** Ferroload wins apples-to-apples — even in the *same*
+  `DataLoader(nw=8)` it's **1.8× HF, 3.9× WebDataset** (no multiprocessing tax).
+- **JPEG decode-bound:** at equal workers Ferroload is ~on par with HF (slightly
+  behind) and behind WebDataset; its native in-process path beats HF nw=8 by
+  avoiding multiprocessing IPC, not by faster decode.
 - **GCS streaming:** **8.9× faster** after coalescing remote reads — now ahead of
   WebDataset, while keeping random access + a DuckDB-queryable index.
 - **Storage:** always smaller than WebDataset (≈2× for tiny images).

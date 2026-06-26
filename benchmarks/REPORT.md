@@ -29,7 +29,8 @@ multiprocessing needed), smallest-after-Arrow storage, and unique capabilities
 (O(manifest) open, DuckDB-queryable index, ranged columnar subset). The two gaps
 this benchmark first exposed — per-sample remote reads in the decode path, and the
 Rust JPEG decoder — **have since been fixed** (§1b); after the fixes Ferroload also
-*leads* GCS streaming and matches HF's best JPEG-decode throughput from one process.
+*leads* GCS streaming; on JPEG decode it's ~on par with HF at equal worker counts
+(§4a) — its native path's edge over worker loaders is avoiding multiprocessing IPC.
 
 ## 1b. The two gaps — fixed
 
@@ -41,7 +42,7 @@ After the first pass, both fixable Ferroload gaps were implemented and re-measur
 | **libjpeg-turbo decode** | new `turbojpeg` feature: JPEG decoded via libjpeg-turbo (SIMD C) instead of pure-Rust zune-jpeg | cars 5359 / FFHQ 5223 | **6356 / 6139** | **+18%** |
 
 - **GCS streaming (FFHQ):** Ferroload **113 → 1008 samp/s** and first-batch **7.1 → 2.4 s** — now **2.3× faster than WebDataset** (was 4.5× slower). laion-pop streaming **113 → 783 samp/s**.
-- **Local JPEG decode (1 process):** Ferroload native now **matches/exceeds HF's best** (HF nw4: cars 6452 / FFHQ 6010) and beats HF nw8 and WDS nw4 — see updated §4.
+- **Local JPEG decode:** Ferroload native beats HF nw=8 by avoiding multiprocessing IPC, but **apples-to-apples in the same DataLoader at nw=8 it's ~on par with HF (slightly behind) and behind WebDataset** (§4a). turbojpeg's +18% lifts the per-core decode to ≈ PIL.
 - Both verified for correctness (`test_map.py`, `test_combinations.py` incl. sparse modalities). The `turbojpeg` feature is opt-in (default build stays pure-Rust); the coalescing fix is unconditional.
 
 ---
@@ -142,12 +143,42 @@ python run_all.py cifar10 20000   # sweep + write results/cifar10.json
 | Ferroload native (zune-jpeg) | 5,223 (1 process) | — | — |
 | **Ferroload native (turbojpeg)** | **6,139** (1 process) | — | — |
 
-> In the JPEG-bound regime **WebDataset @8 workers leads** (~8.7–8.9k). With the
-> `turbojpeg` fix, Ferroload native (~6.1–6.4k) from **one process** now **matches
-> HF's best (nw=4)** and beats HF nw=8 + WDS nw=4, with the **lowest first-batch
-> latency** (§7). WDS still leads on pure decode throughput at 8 workers — that
-> remaining gap is the sequential-streaming access pattern + 8 processes, not the
-> decoder. Note HF *regresses* nw4→nw8 (oversubscription on 10 cores).
+> In the JPEG-bound regime **WebDataset @8 workers leads** (~8.7–8.9k). Note HF
+> *regresses* nw4→nw8 (oversubscription on 10 cores). (These per-worker sweeps are
+> from the first session; the apples-to-apples table below is a controlled
+> same-session rerun — throughput has ±10–20% run-to-run variance, so read small
+> gaps as ties.)
+
+### 4a. Apples-to-apples — same harness, `num_workers=8`
+
+The fairest comparison runs **all** loaders in the same `torch DataLoader(num_workers=8)`
+harness. For Ferroload that means a map-style `FerroTorchDataset` in the DataLoader
+with **`RAYON_NUM_THREADS=1`** (one decode thread per worker, exactly like a
+single-threaded PIL worker). We also show Ferroload **native** (its recommended
+in-process path: all cores via rayon, no worker processes, no IPC). Same machine session:
+
+| dataset | HF (nw=8) | WebDataset (nw=8) | **Ferroload, same DataLoader (nw=8)** | Ferroload native |
+|---|--:|--:|--:|--:|
+| CIFAR-10 | 89,905 | 41,700 | **164,072** | 191,513 |
+| Stanford-Cars | 5,927 | 9,519 | **5,064** | 6,541 |
+| FFHQ-256 | 4,887 | 8,148 | **4,682** | 6,335 |
+
+**What the controlled comparison actually shows:**
+- **CIFAR-10 (overhead-bound): Ferroload wins every framing.** Even in the *same*
+  DataLoader at nw=8, it's **1.8× HF and 3.9× WebDataset** — the win is not an
+  artifact of "native vs workers."
+- **JPEG decode-bound: apples-to-apples, Ferroload is ~on par with HF (slightly
+  behind) and clearly behind WebDataset.** At equal parallelism the per-worker Rust
+  (turbojpeg) JPEG decode ≈ PIL/libjpeg-turbo, and WebDataset's sequential tar
+  streaming leads.
+- **Native's edge is avoiding IPC, not faster decode.** Ferroload native (6,541) >
+  its own DataLoader run (5,064) by ~30% — that gap is the cost of pickling/moving
+  decoded tensors worker→main in the multiprocessing harness. So "native beats HF
+  nw=8" is a real *architectural* advantage (no multiprocessing/IPC, GIL released
+  in-process), **not** a per-core decode win. Run Ferroload native; don't wrap it
+  in a worker DataLoader.
+- Capping rayon to 1 thread/worker is *faster* than uncapped in the DataLoader
+  (cars 5,064 vs 4,492) — uncapped oversubscribes (8 procs × all cores).
 
 ---
 
@@ -230,7 +261,8 @@ Neither WebDataset nor HF Arrow offers that random-access + queryable-index comb
    (§1b/§6). Unconditional (helps any remote dataset); local path unchanged.
 2. ✅ **DONE — libjpeg-turbo codec.** New opt-in `turbojpeg` feature decodes JPEG via
    libjpeg-turbo (SIMD C). JPEG decode **+18%** (cars 5359→6356, FFHQ 5223→6139),
-   now matching HF's best from one process (§1b/§4). Default build stays pure-Rust.
+   ≈ PIL per core; apples-to-apples at nw=8 Ferroload is ~on par with HF (§4a).
+   Default build stays pure-Rust.
 3. ⬜ **TODO — Expose `shard_bytes_target` in the Python `Writer`.** The 187 MB single
    data shard needed multipart upload; smaller shards ease upload + parallel streaming.
 

@@ -27,13 +27,23 @@ kept as an [appendix](#appendix-earlier-2-way-local-read-micro-benchmark).
 
 ![Local data-loading throughput](benchmarks/charts/throughput.png)
 
-- **Tiny images (CIFAR-10):** Ferroload from a **single process** (129k samp/s,
-  in-process rayon) beats HF at 8 workers (96k) and WebDataset at 8 workers (37k).
-  When the cost is per-sample overhead, in-process decode crushes multiprocessing.
-- **JPEG decode-bound (Cars / FFHQ):** WebDataset @8 workers leads (~8.7–8.9k);
-  Ferroload native (~6.1–6.4k, with the `turbojpeg` codec) matches HF's best from
-  one process and has the lowest first-batch latency. The residual WDS lead is its
-  sequential-streaming access pattern + 8 processes, not the decoder.
+Apples-to-apples — **all loaders at `num_workers=8`** (Ferroload in the same
+`torch DataLoader`, one decode thread per worker), plus Ferroload **native** (its
+recommended in-process path: all cores, no worker processes, no IPC):
+
+- **Tiny images (CIFAR-10): Ferroload wins every framing.** Even in the *same*
+  DataLoader at nw=8 it does **164k samp/s — 1.8× HF, 3.9× WebDataset** (native
+  191k). When the cost is per-sample overhead, in-process decode crushes
+  multiprocessing; this is not an artifact of "native vs workers".
+- **JPEG decode-bound (Cars / FFHQ): roughly a tie with HF, behind WebDataset.**
+  At equal parallelism Ferroload (~4.7–5.1k) is ~on par with HF (slightly behind)
+  and below WebDataset (~8–9.5k, sequential tar streaming). Ferroload **native**
+  (~6.3–6.5k) beats HF nw=8 — but that edge is **avoiding multiprocessing IPC**
+  (its DataLoader run is ~30% slower than native), not faster per-core decode. The
+  `turbojpeg` codec brings the per-core JPEG decode up to ≈ PIL/libjpeg-turbo.
+
+  **Takeaway: run Ferroload native (don't wrap it in a worker DataLoader);** its
+  real wins are tiny-image throughput, storage, and remote streaming below.
 
 ## Storage footprint
 

@@ -106,5 +106,28 @@ def ferro_pil_loader(ds_dir, target, batch_size, num_workers):
     )
 
 
+def ferro_dl_collate(samples):
+    return np.stack([s["image"] for s in samples])
+
+
+def ferroload_dl_loader(ds_dir, target, batch_size, num_workers):
+    """Ferroload in the SAME torch DataLoader harness as HF/WDS — N worker
+    processes, batched Rust decode (`decode_many`) per worker. Apples-to-apples
+    on parallelism mechanism. Set RAYON_NUM_THREADS=1 so each worker uses a single
+    decode thread (like a PIL worker) rather than spawning a full rayon pool."""
+    import torch.utils.data as tud
+    from ferroload._core import Dataset as CoreDS
+    from ferroload.loader import FerroTorchDataset
+    ds = CoreDS.open(ds_dir)
+    resize = (target, target) if target else None
+    tds = FerroTorchDataset(ds, images=["image"], resize=resize, out="numpy")
+    return tud.DataLoader(
+        tds, batch_size=batch_size, num_workers=num_workers, shuffle=False,
+        drop_last=True, collate_fn=ferro_dl_collate,
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=(4 if num_workers > 0 else None),
+    )
+
+
 def batch_n(b):
     return b.shape[0]
