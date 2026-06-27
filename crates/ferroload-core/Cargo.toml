@@ -7,12 +7,24 @@ description = "Pure-Rust format core for the Ferroload multimodal dataset format
 
 [features]
 default = []
-# Production index backend; off by default so the test suite stays light.
-# When enabled, the parquet-backed IndexBackend is compiled in.
-parquet = ["dep:arrow", "dep:parquet"]
+# Remote (object-store) datasets: `Dataset::open_url("s3://…")` streams shards via
+# ranged GETs through a local cache. `remote` pulls the io layer + async Parquet
+# reading (column-range/row-group reads of the index over the network); the
+# per-cloud features add the matching backend (TLS/HTTP stack).
+remote = ["dep:ferroload-io", "dep:futures", "parquet/async"]
+aws = ["remote", "ferroload-io/aws"]
+gcp = ["remote", "ferroload-io/gcp"]
+azure = ["remote", "ferroload-io/azure"]
+# Build every cloud backend at once.
+cloud = ["aws", "gcp", "azure"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-arrow = { version = "53", optional = true, default-features = false }
-parquet = { version = "53", optional = true, default-features = false, features = ["arrow"] }
+# The index is a directory of Parquet shards (queryable by DuckDB/Arrow/DataFusion);
+# arrow + parquet are core, not optional.
+arrow = { version = "53", default-features = false }
+parquet = { version = "53", default-features = false, features = ["arrow", "zstd"] }
+bytes = "1"
+futures = { version = "0.3", optional = true }
+ferroload-io = { path = "../ferroload-io", optional = true }

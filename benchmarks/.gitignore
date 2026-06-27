@@ -1,0 +1,4 @@
+# built datasets (large; regenerate with build.py) — keep results/ + charts/
+bench_data/
+__pycache__/
+*.pyc

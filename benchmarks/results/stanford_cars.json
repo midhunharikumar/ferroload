@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "name": "stanford_cars",
+    "n": 8420,
+    "ext": "jpg",
+    "target": 224,
+    "wds_maxcount": 526,
+    "sizes": {
+      "encoded_raw": 146460706,
+      "hf_arrow": 146943532,
+      "webdataset": 178892800,
+      "ferroload": 153528560
+    }
+  },
+  "results": [
+    {
+      "dataset": "stanford_cars",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7936,
+      "seconds": 4.9444,
+      "samples_per_s": 1605.0,
+      "first_batch_s": 0.0902,
+      "peak_rss_mb": 724.6,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7936,
+      "seconds": 5.4658,
+      "samples_per_s": 1451.9,
+      "first_batch_s": 0.0978,
+      "peak_rss_mb": 472.9,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 4,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7936,
+      "seconds": 1.23,
+      "samples_per_s": 6452.0,
+      "first_batch_s": 0.1213,
+      "peak_rss_mb": 640.6,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 4,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7808,
+      "seconds": 1.3462,
+      "samples_per_s": 5799.8,
+      "first_batch_s": 0.2267,
+      "peak_rss_mb": 303.0,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "hf_arrow",
+      "loader": "hf_arrow",
+      "num_workers": 8,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7936,
+      "seconds": 1.4046,
+      "samples_per_s": 5649.8,
+      "first_batch_s": 0.4964,
+      "peak_rss_mb": 739.4,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "webdataset",
+      "loader": "webdataset",
+      "num_workers": 8,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 7808,
+      "seconds": 0.8744,
+      "samples_per_s": 8929.9,
+      "first_batch_s": 0.26,
+      "peak_rss_mb": 305.7,
+      "notes": ""
+    },
+    {
+      "dataset": "stanford_cars",
+      "fmt": "ferroload",
+      "loader": "ferro_native",
+      "num_workers": 0,
+      "batch_size": 128,
+      "target_px": 224,
+      "n_samples": 8036,
+      "seconds": 1.4997,
+      "samples_per_s": 5358.5,
+      "first_batch_s": 0.0695,
+      "peak_rss_mb": 560.9,
+      "notes": ""
+    }
+  ]
+}

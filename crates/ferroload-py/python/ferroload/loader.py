@@ -9,7 +9,16 @@ works because `__getitems__` returns a plain list of sample dicts.
 """
 from __future__ import annotations
 
+import random
 from typing import Optional, Sequence
+
+# Subclass torch's IterableDataset when torch is present (so a DataLoader treats
+# the streaming view as iterable via its isinstance check); fall back to `object`
+# so the module still imports without torch.
+try:
+    from torch.utils.data import IterableDataset as _IterableBase
+except Exception:  # pragma: no cover - torch optional
+    _IterableBase = object
 
 
 def subset_dataset(tds, indices):
@@ -219,6 +228,94 @@ class FerroTorchDataset:
 
 
 # --------------------------------------------------------------------------
+# Streaming / iterable view (WebDataset-style: shuffle shard blocks + buffer)
+# --------------------------------------------------------------------------
+
+class FerroIterableDataset(_IterableBase):
+    """Iterable (streaming) view over the *same* `ferroload.Dataset` — the
+    counterpart to the map-style `FerroTorchDataset`. Instead of random per-sample
+    access, it reads the dataset in **contiguous blocks** (sequential, shard-local,
+    object-store-friendly), decodes each block in parallel in Rust, and yields
+    through a **shuffle buffer** of `shuffle_buffer` samples for approximate
+    shuffling. Hand it to a `DataLoader` (no sampler) for cloud-scale streaming.
+
+    Sharding for DDP + DataLoader workers is automatic: blocks are split across
+    `world_size` ranks (fixed, for `__len__`), then across the loader's workers at
+    iteration time via `torch.utils.data.get_worker_info()`. Call `set_epoch(e)`
+    each epoch to reshuffle block order. Decode/columns config is identical to
+    `FerroTorchDataset` (it wraps one internally), so nothing is duplicated.
+    """
+
+    def __init__(self, fds, *, columns=None, images=None, videos=None, raw=None,
+                 meta=None, arrays=None, resize=(224, 224), video_resize=None,
+                 num_frames=16, out="numpy", shuffle=True, shuffle_buffer=8192,
+                 block_size=1024, world_size=1, rank=0, seed=0):
+        super().__init__()
+        # the heavy lifting (decode, columns, out conversion) is the map view's job
+        self.tds = FerroTorchDataset(
+            fds, columns=columns, images=images, videos=videos, raw=raw, meta=meta,
+            arrays=arrays, resize=resize, video_resize=video_resize,
+            num_frames=num_frames, out=out,
+        )
+        self.fds = fds
+        self.block_size = max(1, int(block_size))
+        self.shuffle = bool(shuffle)
+        self.shuffle_buffer = max(1, int(shuffle_buffer))
+        self.world_size = max(1, int(world_size))
+        self.rank = int(rank)
+        self.seed = int(seed)
+        self.epoch = 0
+        n = len(fds)
+        blocks = [(i, min(i + self.block_size, n)) for i in range(0, n, self.block_size)]
+        # fixed per-rank split (disjoint across ranks); worker split happens in __iter__
+        self._rank_blocks = blocks[self.rank::self.world_size]
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __len__(self):
+        # samples this rank yields per epoch (across all its workers)
+        return sum(e - s for s, e in self._rank_blocks)
+
+    def __iter__(self):
+        # split this rank's blocks across the DataLoader's workers
+        worker_id, num_workers = 0, 1
+        try:
+            import torch.utils.data as _tud
+            info = _tud.get_worker_info()
+            if info is not None:
+                worker_id, num_workers = info.id, info.num_workers
+        except Exception:
+            pass
+        my_blocks = self._rank_blocks[worker_id::num_workers]
+        rng = random.Random(
+            (self.seed * 1_000_003) ^ (self.epoch * 9176) ^ (self.rank << 8) ^ worker_id
+        )
+        if self.shuffle:
+            my_blocks = list(my_blocks)
+            rng.shuffle(my_blocks)
+
+        if not self.shuffle:
+            for start, end in my_blocks:
+                yield from self.tds.__getitems__(list(range(start, end)))
+            return
+
+        # WebDataset-style streaming shuffle buffer
+        buf = []
+        K = self.shuffle_buffer
+        for start, end in my_blocks:
+            for s in self.tds.__getitems__(list(range(start, end))):
+                if len(buf) < K:
+                    buf.append(s)
+                else:
+                    j = rng.randrange(K)
+                    out, buf[j] = buf[j], s
+                    yield out
+        rng.shuffle(buf)
+        yield from buf
+
+
+# --------------------------------------------------------------------------
 # Deterministic distributed sampling + async prefetch
 # --------------------------------------------------------------------------
 
@@ -338,41 +435,92 @@ class PrefetchLoader:
             yield payload
 
 
+def _prefetch(gen, depth=2):
+    """Run a generator on a daemon thread, buffering up to `depth` items ahead on a
+    bounded queue. The producer's heavy work (Rust block decode / remote fetch,
+    which release the GIL) then overlaps with the consumer (training). Single-pass."""
+    import queue
+    import threading
+
+    q = queue.Queue(maxsize=max(1, int(depth)))
+
+    def worker():
+        try:
+            for item in gen:
+                q.put(("ok", item))
+        except Exception as e:  # surface to the consumer
+            q.put(("err", e))
+        finally:
+            q.put(("done", None))
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        tag, payload = q.get()
+        if tag == "done":
+            break
+        if tag == "err":
+            raise payload
+        yield payload
+
+
 # --------------------------------------------------------------------------
 # One-call initializer
 # --------------------------------------------------------------------------
 
 class FerroLoader:
-    """Open a dataset and iterate collated minibatches in one object.
+    """Open a dataset and iterate collated minibatches in one object. The access
+    pattern is a single knob, `streaming`:
 
-    Bundles `Dataset.open` + `FerroTorchDataset` + `FerroSampler` +
-    `PrefetchLoader`. Call `set_epoch(e)` each epoch (reshuffles).
+      - `streaming=False` (default) — **map-style**: a deterministic `FerroSampler`
+        + random per-sample reads + background prefetch. Exact shuffle, `ds[i]`.
+      - `streaming=True` — **iterable/streaming**: a `FerroIterableDataset` that
+        shuffles shard-local blocks and yields through a `shuffle_buffer`
+        (WebDataset-style). Fewer, larger sequential reads — the object-store
+        (s3://, gs://) friendly path. Approximate shuffle, no random `ds[i]`.
 
-        # `columns` lets the loader resolve each name's kind from the manifest:
+    Either way it's the same `Dataset`, columns config, decode, and cache.
+    Call `set_epoch(e)` each epoch to reshuffle.
+
         dl = make_loader("/data/ds", batch_size=64,
                          columns=["image", "video", "label"], resize=(224, 224))
+        # cloud-scale streaming (no sampler; block-shuffle + buffer):
+        dl = make_loader("s3://bucket/ds", batch_size=256, columns=["image", "caption"],
+                         streaming=True, shuffle_buffer=16384)
         for epoch in range(E):
             dl.set_epoch(epoch)
             for batch in dl:
-                ...                      # batch["image"], batch["video"], batch["label"], ...
+                ...
     """
 
     def __init__(self, root, batch_size=32, *, columns=None, images=None, videos=None,
                  raw=None, meta=None, arrays=None, resize=(224, 224), video_resize=None,
                  num_frames=16, out="numpy", shuffle=True, world_size=1, rank=0, seed=0,
-                 depth=2, drop_last=False, collate_fn=None):
+                 prefetch=2, drop_last=False, collate_fn=None, cache_dir=None,
+                 streaming=False, shuffle_buffer=8192, block_size=1024):
         from ._core import Dataset
-        self.ds = Dataset.open(root)
-        self.tds = FerroTorchDataset(
-            self.ds, columns=columns, images=images, videos=videos, raw=raw,
-            meta=meta, arrays=arrays,
-            resize=resize, video_resize=video_resize, num_frames=num_frames, out=out,
-        )
-        self.sampler = FerroSampler(len(self.ds), world_size=world_size, rank=rank,
-                                    seed=seed, shuffle=shuffle)
+        # `root` may be a local path or a remote URL (s3://, gs://, az://); remote
+        # shard bytes stream through a local cache at `cache_dir`.
+        self.ds = Dataset.open(root, cache_dir)
         self.batch_size = int(batch_size)
-        self.depth = depth
+        self.prefetch = prefetch
         self.drop_last = drop_last
+        self.streaming = bool(streaming)
+        cfg = dict(columns=columns, images=images, videos=videos, raw=raw, meta=meta,
+                   arrays=arrays, resize=resize, video_resize=video_resize,
+                   num_frames=num_frames, out=out)
+        if self.streaming:
+            # iterable / streaming access pattern: shard-block shuffle + buffer
+            self.iter_ds = FerroIterableDataset(
+                self.ds, shuffle=shuffle, shuffle_buffer=shuffle_buffer,
+                block_size=block_size, world_size=world_size, rank=rank, seed=seed, **cfg)
+            self.tds = None
+            self.sampler = None
+        else:
+            # map-style access pattern: deterministic sampler + random reads
+            self.tds = FerroTorchDataset(self.ds, **cfg)
+            self.sampler = FerroSampler(len(self.ds), world_size=world_size, rank=rank,
+                                        seed=seed, shuffle=shuffle)
+            self.iter_ds = None
         if collate_fn is None:
             if out == "torch":
                 from torch.utils.data._utils.collate import default_collate
@@ -382,21 +530,36 @@ class FerroLoader:
         self.collate_fn = collate_fn
 
     def set_epoch(self, epoch):
-        self.sampler.set_epoch(epoch)
+        (self.iter_ds or self.sampler).set_epoch(epoch)
 
     def __len__(self):
-        n = len(self.sampler)
+        n = len(self.iter_ds) if self.streaming else len(self.sampler)
         if self.drop_last:
             return n // self.batch_size
         return (n + self.batch_size - 1) // self.batch_size
 
     def __iter__(self):
+        if self.streaming:
+            # overlap block decode / remote fetch with training (prefetch batches ahead)
+            return _prefetch(self._iter_streaming(), self.prefetch)
         return iter(PrefetchLoader(
             self.tds,
             batched(self.sampler, self.batch_size, self.drop_last),
             collate_fn=self.collate_fn,
-            depth=self.depth,
+            depth=self.prefetch,
         ))
+
+    def _iter_streaming(self):
+        # the parallel Rust decode happens per block inside the iterable view; here
+        # we just group its sample stream into collated minibatches.
+        batch = []
+        for sample in self.iter_ds:
+            batch.append(sample)
+            if len(batch) == self.batch_size:
+                yield self.collate_fn(batch)
+                batch = []
+        if batch and not self.drop_last:
+            yield self.collate_fn(batch)
 
 
 def make_loader(root, batch_size=32, **kwargs):

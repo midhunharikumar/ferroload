@@ -1,121 +1,136 @@
-# Ferroload vs HuggingFace `datasets` — local read benchmark
+# Benchmarks
+
+A 3-way data-loading comparison — **Ferroload** vs **WebDataset** vs **HF
+`datasets` (Arrow)** (the loader 🤗 diffusers training uses) — across three image
+datasets, plus a GCS streaming benchmark. Full harness, methodology, and raw
+numbers live in [`benchmarks/`](benchmarks/) ([REPORT.md](benchmarks/REPORT.md),
+[results/](benchmarks/results)). An earlier 2-way local-read micro-benchmark is
+kept as an [appendix](#appendix-earlier-2-way-local-read-micro-benchmark).
+
+> **Fairness:** all three formats are built from the **same encoded image bytes**
+> and every loader decodes to the **same target** (decode → optional resize →
+> `uint8` HWC), so per-sample CPU work is identical — only the format + loader
+> machinery differ. Hardware: Apple M2 Pro (10 cores, 17 GB). Subsets sized to
+> fit local disk; throughput (samples/s) is scale-independent. GCS over a
+> ~3.6 MB/s link, single client. Numbers are relative — the *patterns* are the
+> signal.
+
+## Datasets
+
+| Dataset | Source | N | Stored | Decode target | Regime |
+|---|---|--:|---|---|---|
+| CIFAR-10 | `cifar10` | 50,000 | PNG 32×32 + label | native 32 | overhead-bound |
+| Stanford-Cars | `roskyluo/stanford_cars_blip` | 8,420 | JPEG + BLIP caption | →224 | JPEG-decode-bound |
+| FFHQ-256 | `merkol/ffhq-256` | 10,000 | JPEG 256² | →224 | JPEG-decode-bound |
+
+## Throughput (best config per loader)
+
+![Local data-loading throughput](benchmarks/charts/throughput.png)
+
+Apples-to-apples — **all loaders at `num_workers=8`** (Ferroload in the same
+`torch DataLoader`, one decode thread per worker), plus Ferroload **native** (its
+recommended in-process path: all cores, no worker processes, no IPC):
+
+- **Tiny images (CIFAR-10): Ferroload wins every framing.** Even in the *same*
+  DataLoader at nw=8 it does **164k samp/s — 1.8× HF, 3.9× WebDataset** (native
+  191k). When the cost is per-sample overhead, in-process decode crushes
+  multiprocessing; this is not an artifact of "native vs workers".
+- **JPEG decode-bound (Cars / FFHQ): Ferroload native now leads.** After adding
+  **`fast_image_resize`** (SIMD resize) on top of `turbojpeg`, Ferroload native
+  (~10k cars / ~9.6k FFHQ) **beats WebDataset nw=8** (9.5k / 8.1k) and HF nw=8 from a
+  **single process** — and even the pure-Rust default (zune + SIMD resize) beats HF
+  nw=8. The earlier loss was the *resize* step (scalar `image` crate), not decode:
+  HF/PIL were winning on Pillow's C resize + libjpeg-turbo. (`fast_image_resize` is
+  pure-Rust, cross-platform NEON/AVX2.)
+  - **But in the *same* worker `DataLoader(nw=8)`, Ferroload stays ~5.5k** (≈ HF,
+    behind WebDataset) — that path is **IPC-bound** (moving decoded tensors
+    worker→main), so the decode/resize win only lands in the **native** in-process
+    path. **Takeaway: run Ferroload native, not wrapped in a worker DataLoader.**
+
+  See [benchmarks/DECODE_OPTIMIZATION.md](benchmarks/DECODE_OPTIMIZATION.md) for the
+  decode research + measured speedups.
+
+## Storage footprint
+
+![Storage footprint per format](benchmarks/charts/storage.png)
+
+HF Arrow ≈ raw bytes; **Ferroload is always smaller than WebDataset** (≈2× smaller
+for tiny images — WebDataset pads every tar member and stores a separate `.json`
+meta member per sample, while Ferroload keeps meta in a compact zstd Parquet index).
+
+## GCS streaming
+
+![GCS streaming throughput before/after](benchmarks/charts/gcs_streaming.png)
+
+WebDataset streams whole tar shards sequentially (bandwidth-bound). Ferroload's
+decode path originally issued **per-sample ranged GETs** (latency-bound, 113
+samp/s). After routing the decode path through the **coalesced** reader (one
+`get_ranges` per shard), Ferroload hits **1008 samp/s — 8.9× faster, and 2.3×
+faster than WebDataset** — while keeping random access + a queryable index that
+WebDataset doesn't have.
+
+## Two gaps the benchmark exposed — and fixed
+
+![JPEG decode with turbojpeg](benchmarks/charts/jpeg_decode.png)
+
+| Fix | Change | Before | After | Δ |
+|---|---|--:|--:|--:|
+| **Coalesced remote reads** | `decode_many`/`read_many` issue one coalesced `get_ranges` per shard instead of one GET per sample | 113 samp/s | **1008** | **8.9×** |
+| **libjpeg-turbo decode** (opt-in `turbojpeg` feature) | JPEG via libjpeg-turbo (SIMD C) instead of pure-Rust zune-jpeg | 5.2–5.4k | **6.1–6.4k** | **+18%** |
+
+Both verified for correctness (`test_map.py`, `test_combinations.py`). The
+coalescing fix is unconditional; `turbojpeg` is opt-in (default build stays
+pure-Rust).
+
+## Where each format wins
+
+- **Ferroload** — tiny-image throughput (no multiprocessing tax), fastest GCS
+  streaming (after fix), smaller-than-WebDataset storage, and unique capabilities:
+  **O(manifest) remote `open`**, **ranged columnar `subset`**, and a
+  **DuckDB-queryable index** over the same dataset you train on.
+- **WebDataset** — simple sequential tar streaming; strong raw JPEG-decode
+  throughput at high worker counts; leanest worker RAM.
+- **HF `datasets` (Arrow)** — smallest on disk (raw bytes), good queryable
+  metadata, scales with `num_workers`; no tensor-shard / remote-range story.
+
+See [benchmarks/REPORT.md](benchmarks/REPORT.md) for per-worker tables,
+first-batch latency, peak RAM, the decoder-isolation analysis, limitations, and
+reproduction steps.
+
+---
+
+# Appendix: earlier 2-way local-read micro-benchmark
+
+> Kept for history. This earlier benchmark compared **only** Ferroload vs HF
+> `datasets` for *local sequential read* on MNIST/CIFAR via `python/bench_read.py`,
+> before the 3-way harness above. It's where the per-sample `File::open()` reopen
+> bug (and the GIL-released `read_many`/`decode_many` paths) were first found.
 
 Compares **sequential local read throughput** of a HuggingFace Arrow dataset
 (on disk) against the Ferroload format, using the **same encoded image bytes**
-for both so it is apples-to-apples.
+for both so it is apples-to-apples. Script: `python/bench_read.py`.
 
-Script: `python/bench_read.py`. Run it yourself:
+**A perf bug found and fixed:** the first reader called `File::open()` on the shard
+**on every `get()`** — one syscall per sample. On tiny images that dominated and
+made ferroload *slower* than HF's mmap'd Arrow. Fix: cache shard file handles +
+positional `read_exact_at`; plus lighter `read(i, modality)` and
+`read_many(indices, modality)` (one FFI call, I/O in Rust with the GIL released).
 
-```bash
-PYTHONPATH=/dir/with/ferroload.so \
-python3 python/bench_read.py --dataset ylecun/mnist --n 3000 --repeats 3
-```
+**Results — `ylecun/mnist`, N=10000, best of 5 (release, 4 cores):**
 
-## Method
+| Benchmark | samples/s | vs HF |
+|---|---:|---:|
+| HF raw bytes | 107,208 | 1.0× |
+| ferro raw `get()` (full dict) | 895,529 | 8.4× |
+| ferro raw `read()` (minimal) | 1,653,496 | 15× |
+| ferro raw `read_batch()` (contiguous batched) | 2,177,206 | 20× |
+| HF decode (PIL) | 28,842 | 1.0× |
+| ferro decode (PIL bytes) | 50,672 | 1.8× |
+| ferro decode (Rust //, zero-copy NumPy) | 422,201 | 14.6× |
 
-1. `load_dataset(<id>, split="train[:N]")` downloads once, then reads from
-   on-disk Arrow — the standard "HF dataset on local" path.
-2. The identical encoded bytes (`Image(decode=False)`) are packed into a
-   Ferroload dataset, so both stores hold byte-for-byte the same images.
-3. Two regimes, each timed best-of-`repeats` (warm page cache):
-   - **raw**: return encoded image bytes + label (no pixel decode)
-   - **decode**: also PNG-decode to pixels with PIL (the real training cost)
-
-## A perf bug we found and fixed
-
-The first version of the reader called `File::open()` on the shard **on every
-`get()`** — one syscall per sample. On tiny images that dominated, and on a
-warm-cache Mac it made ferroload *slower* than HF's memory-mapped Arrow. The fix:
-cache shard file handles and read positionally with `read_exact_at` (no reopen, no
-seek). We also added two lighter read paths: `read(i, modality)` (just the bytes,
-no dict/meta) and `read_many(indices, modality)` (one FFI call, all I/O in Rust
-with the **GIL released** — the path a DataLoader worker should use).
-
-## Results — `ylecun/mnist`, N=10000, best of 5 (Linux sandbox, **release**, 4 cores)
-
-| Benchmark | time (s) | samples/s | MB/s | vs HF |
-|---|---:|---:|---:|---:|
-| HF  raw bytes | 0.0933 | 107,208 | 29.5 | 1.0× |
-| ferro raw `get()` (full dict) | 0.0112 | 895,529 | 246.7 | **8.4×** |
-| ferro raw `read()` (minimal) | 0.0060 | 1,653,496 | 455.6 | **15×** |
-| ferro raw `read_batch()` (contiguous batched) | 0.0046 | 2,177,206 | 599.9 | **20×** |
-| HF  decode (PIL) | 0.3467 | 28,842 | 7.9 | 1.0× |
-| ferro decode (PIL bytes) | 0.1973 | 50,672 | 14.0 | **1.8×** |
-| ferro decode (Rust //, zero-copy NumPy) | 0.0237 | 422,201 | 116.3 | **14.6×** |
-
-On these tiny (28×28) images, per-sample Python overhead dominates, so the Rust
-paths win big once the per-call `open()` was removed. `decode_many` returns
-**zero-copy NumPy** `uint8` arrays decoded in parallel with the GIL released.
-
-> Earlier drafts of this doc cited a one-off ~1.9× from a single run before the
-> reopen bug was found; treat the table above as the current, reproducible result.
-> Numbers vary by machine — re-run on yours.
-
-## Decode is the bottleneck for real (large) images — and where to speed up
-
-On a dataset with real ~256×256 JPEGs, **decode costs ~100× the raw read**. So
-once reads are fast, the only thing that matters is decode. Two findings:
-
-- **Build `--release`.** Image decode is compute-heavy; a *debug* build of the Rust
-  decoder is ~7× slower than libjpeg/PIL. In release it wins. (Raw byte reads are
-  I/O-bound and barely care about debug vs release — which is why the tables above
-  still held in debug.)
-- **Decode in Rust, parallel, GIL released** (`decode_many`) beats single-threaded
-  PIL. Synthetic 500×(256×256) JPEG, 4 cores, **release**:
-
-  | decode path | img/s |
-  |---|---:|
-  | PIL, 1 thread | 1,992 |
-  | **ferro `decode_many` (Rust //, zero-copy NumPy)** | **5,087  (2.55×)** |
-
-  Smaller multiple than tiny images because here decode *compute* dominates (less
-  Python overhead to eliminate). It scales with cores — expect a larger gap on
-  8–10 core machines. `decode_many` moves the decoded buffer straight into NumPy
-  (`into_pyarray`, no copy), so the previous serial GIL-held copy is gone.
-
-### Where to speed up further (in priority order)
-
-1. **Parallel/Rust decode** — `decode_many` (done); scales with cores. Biggest win
-   for large images because decode dominates.
-2. **GPU decode** (nvJPEG / NVDEC) — for the heaviest image/video workloads.
-3. **Offline pre-decode/resize as a layer** — decode+resize once via the enrichment
-   `map`, store decoded/resized tensors, then training reads with *zero* decode.
-   Best when you run many epochs.
-4. **Resize-on-decode** — decode JPEGs directly to the target size (skip full-res).
-5. **Async prefetch overlap** — hide decode behind GPU compute in the training loop
-   (the micro-benchmark measures decode in isolation; real loops overlap it).
-6. **Zero-copy reads** — return `memoryview` over an mmap'd shard to drop the final
-   bytes copy (helps the raw path; minor next to decode).
-
-Usage of the fast decode path:
-
-```python
-import numpy as np
-for s in range(0, n, 256):
-    for buf, (h, w, c) in ds.decode_many(list(range(s, s+256)), "image"):
-        arr = np.frombuffer(buf, np.uint8).reshape(h, w, c)   # zero-copy view
-```
-
-## Important caveats (read before trusting these numbers)
-
-- **MNIST images are tiny (~280 B).** This is an *overhead-bound* micro-benchmark
-  — it mostly measures per-sample access cost, not bandwidth. With large
-  images/video the decode/bandwidth terms dominate and the ratio will shift; run
-  the script on your real data.
-- **Warm page cache, single process, local SSD.** No cold-cache, no S3/GCS, no
-  `num_workers` parallelism, no async prefetch. The real Ferroload runtime adds
-  byte-budgeted prefetch, a cache tier, and GIL-free decode — none of which are
-  exercised here.
-- **This is the reference Python binding reader**, which decodes nothing in Rust
-  yet and reads JSON index + tar via plain file I/O. The production Parquet index
-  + `object_store` + Rust decoders are expected to widen the gap, especially under
-  concurrency and on cloud storage.
-- The HF path is also doing a tiny bit more work (Arrow row dict construction);
-  both are honest "idiomatic usage" of each library.
-
-## Try larger media
-
-```bash
-python3 python/bench_read.py --dataset uoft-cs/cifar10 --n 2000     # 32x32
-python3 python/bench_read.py --dataset <your image/video set> --n 1000
-```
+On tiny (28×28) images, per-sample Python overhead dominates, so the Rust paths
+win big once the per-call `open()` was removed. On real ~256×256 JPEGs decode
+costs ~100× the raw read, so decode throughput is what matters — which is exactly
+what the 3-way benchmark above measures (and what the `turbojpeg` + coalescing
+fixes improve). Caveats then: warm page cache, single process, local SSD, no
+`num_workers`, no cloud — all of which the 3-way harness above now exercises.

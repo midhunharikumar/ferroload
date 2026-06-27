@@ -41,7 +41,6 @@
 pub mod dataset;
 pub mod error;
 pub mod index;
-#[cfg(feature = "parquet")]
 pub mod index_parquet;
 pub mod manifest;
 pub mod sampler;
@@ -51,6 +50,7 @@ pub mod subset;
 
 pub use dataset::{Dataset, DatasetWriter, LayerWriter, Sample};
 pub use error::{Error, Result};
+pub use index_parquet::ParquetIndex;
 pub use manifest::{Column, LayerRef, Manifest, Modality, FORMAT_VERSION, READER_VERSION};
 pub use sampler::{Sampler, Topology};
 pub use subset::{subset_ids, Predicate};

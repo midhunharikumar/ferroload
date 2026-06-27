@@ -1,0 +1,9 @@
+{
+  "note": "Apples-to-apples: all loaders at num_workers=8, same machine session. Ferroload DataLoader runs FerroTorchDataset with RAYON_NUM_THREADS=1 (1 decode thread/worker). ferro_native = recommended in-process path (all cores, no IPC). Throughput in samples/s; ±10-20% run-to-run variance.",
+  "batch_size": {"cifar10": 256, "stanford_cars": 128, "ffhq256": 128},
+  "samples_per_s": {
+    "cifar10":       {"hf_nw8": 89905,  "wds_nw8": 41700, "ferro_dl_nw8_rayon1": 164072, "ferro_dl_nw8_uncapped": 176712, "ferro_native": 191513},
+    "stanford_cars": {"hf_nw8": 5927,   "wds_nw8": 9519,  "ferro_dl_nw8_rayon1": 5064,   "ferro_dl_nw8_uncapped": 4492,   "ferro_native": 6541},
+    "ffhq256":       {"hf_nw8": 4887,   "wds_nw8": 8148,  "ferro_dl_nw8_rayon1": 4682,   "ferro_dl_nw8_uncapped": 4073,   "ferro_native": 6335}
+  }
+}

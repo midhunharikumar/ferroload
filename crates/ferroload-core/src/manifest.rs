@@ -13,8 +13,10 @@ use std::path::Path;
 
 /// Structural version of the manifest core.
 pub const FORMAT_VERSION: u32 = 1;
-/// The reader version this build implements.
-pub const READER_VERSION: u32 = 1;
+/// The reader version this build implements. The sharded/lazy index is format
+/// v2: datasets set `min_reader_version = 2`, so an older reader fails loudly
+/// (`ReaderTooOld`) instead of misreading the directory.
+pub const READER_VERSION: u32 = 2;
 
 fn one() -> u32 {
     1
@@ -73,9 +75,24 @@ pub struct Column {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct IndexRef {
+    /// Total row count across the whole (sharded) index.
     #[serde(default)]
+    pub rows: u64,
+}
+
+/// One shard of the **sharded** index directory (DESIGN: lazy/sharded index).
+///
+/// The sharded index splits the global index into per-data-shard fragments
+/// (`index/part-NNNNN.json`) so `open()` builds only a tiny directory and loads
+/// row data lazily, on demand, per shard. The shards are ordered by `start_id`,
+/// **contiguous and gapless**, and `sum(rows) == index.rows`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndexShardRef {
+    /// Relative path, e.g. `index/part-00000.json`.
     pub path: String,
-    #[serde(default)]
+    /// First `sample_id` in this shard (dense, contiguous).
+    pub start_id: u64,
+    /// Row count in this shard.
     pub rows: u64,
 }
 
@@ -120,6 +137,10 @@ pub struct Manifest {
     pub modalities: BTreeMap<String, Modality>,
     #[serde(default)]
     pub index: IndexRef,
+    /// The sharded index directory: ordered by `start_id`, contiguous + gapless,
+    /// `sum(rows) == index.rows`. Empty only for a 0-row dataset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub index_shards: Vec<IndexShardRef>,
     #[serde(default)]
     pub shards: ShardsRef,
     #[serde(default)]
@@ -147,6 +168,7 @@ impl Manifest {
             version: 1,
             modalities: BTreeMap::new(),
             index: IndexRef::default(),
+            index_shards: Vec::new(),
             shards: ShardsRef::default(),
             schema: Vec::new(),
             layers: Vec::new(),
@@ -239,6 +261,25 @@ mod tests {
         let ext = back.get_extension("vector_index").unwrap();
         assert_eq!(ext[0]["column"], "image_embedding");
         assert_eq!(ext[0]["dim"], 768);
+    }
+
+    #[test]
+    fn index_shards_roundtrip() {
+        let mut m = Manifest::new("demo");
+        // empty for a 0-row dataset: not serialized
+        assert!(!m.to_json().unwrap().contains("index_shards"));
+        m.index.rows = 5;
+        m.index_shards = vec![
+            IndexShardRef { path: "index/part-00000.json".into(), start_id: 0, rows: 3 },
+            IndexShardRef { path: "index/part-00001.json".into(), start_id: 3, rows: 2 },
+        ];
+        let back = Manifest::from_json(&m.to_json().unwrap()).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.index_shards.len(), 2);
+        assert_eq!(back.index_shards[1].start_id, 3);
+        // invariant: contiguous, gapless, sum == index.rows
+        let sum: u64 = back.index_shards.iter().map(|s| s.rows).sum();
+        assert_eq!(sum, back.index.rows);
     }
 
     #[test]
