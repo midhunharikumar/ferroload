@@ -29,18 +29,33 @@ w.declare("image", "jpg", "tensor", "image")
 w.add("s0000", {"image": open("a.jpg", "rb").read()}, {"label": 3, "caption": "a cat"})
 w.close()
 
-# --- read ---
+# --- read / query ---
 ds = ferroload.Dataset.open("/data/ds")          # local path, or "gs://…" / "s3://…" / "az://…"
-ds[0]                                            # full sample dict (map-style)
-ds.get(0, ["image"])                             # projection: fetch only 'image'
-ds.decode_many([0, 1, 2], "image", resize=(224, 224))   # parallel Rust decode -> NumPy [H,W,C]
+ds[0]                                            # full sample dict; ds.get(0, ["image"]) to project
 ds.subset("label = 3", return_indices=True)      # query the Parquet index -> [sample_id, …]
+```
 
-# --- train ---
+Train with PyTorch — `make_loader(out="torch")` yields collated torch tensors with
+parallel in-Rust decode (no `num_workers` needed):
+
+```python
+import torch
+import ferroload
+
 dl = ferroload.make_loader("/data/ds", batch_size=64, images=["image"],
-                           meta=["label"], resize=(224, 224))
-for batch in dl:
-    ...                                          # batch["image"] is [B,224,224,3] uint8
+                           meta=["label"], resize=(224, 224), out="torch")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+for epoch in range(epochs):
+    dl.set_epoch(epoch)                          # deterministic reshuffle (DDP-aware)
+    for batch in dl:
+        x = batch["image"].permute(0, 3, 1, 2).float().div_(255).to(device)  # NHWC u8 -> NCHW f32
+        y = batch["label"].to(device)
+        loss = loss_fn(model(x), y)
+        loss.backward(); opt.step(); opt.zero_grad()
+
+# Prefer the vanilla API? `ferroload.loader.FerroTorchDataset` plugs straight into
+# torch.utils.data.DataLoader; cloud-scale streaming via make_loader(..., streaming=True).
 ```
 
 Remote datasets stream over the network — `open()` reads only the manifest, and the
