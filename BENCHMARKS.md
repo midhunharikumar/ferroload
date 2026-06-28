@@ -3,8 +3,8 @@
 A 3-way data-loading comparison — **Ferroload** vs **WebDataset** vs **HF
 `datasets` (Arrow)** (the loader 🤗 diffusers training uses) — across three image
 datasets, plus a GCS streaming benchmark. Full harness, methodology, and raw
-numbers live in [`benchmarks/`](benchmarks/) ([REPORT.md](benchmarks/REPORT.md),
-[results/](benchmarks/results)). An earlier 2-way local-read micro-benchmark is
+numbers live in [`benchmarks/`](https://github.com/midhunharikumar/ferroload/tree/main/benchmarks) ([REPORT.md](https://github.com/midhunharikumar/ferroload/blob/main/benchmarks/REPORT.md),
+[results/](https://github.com/midhunharikumar/ferroload/tree/main/benchmarks/results)). An earlier 2-way local-read micro-benchmark is
 kept as an [appendix](#appendix-earlier-2-way-local-read-micro-benchmark).
 
 > **Fairness:** all three formats are built from the **same encoded image bytes**
@@ -25,7 +25,7 @@ kept as an [appendix](#appendix-earlier-2-way-local-read-micro-benchmark).
 
 ## Throughput (best config per loader)
 
-![Local data-loading throughput](benchmarks/charts/throughput.png)
+![Local data-loading throughput](https://raw.githubusercontent.com/midhunharikumar/ferroload/main/benchmarks/charts/throughput.png)
 
 Apples-to-apples — **all loaders at `num_workers=8`** (Ferroload in the same
 `torch DataLoader`, one decode thread per worker), plus Ferroload **native** (its
@@ -47,12 +47,12 @@ recommended in-process path: all cores, no worker processes, no IPC):
     worker→main), so the decode/resize win only lands in the **native** in-process
     path. **Takeaway: run Ferroload native, not wrapped in a worker DataLoader.**
 
-  See [benchmarks/DECODE_OPTIMIZATION.md](benchmarks/DECODE_OPTIMIZATION.md) for the
+  See [benchmarks/DECODE_OPTIMIZATION.md](https://github.com/midhunharikumar/ferroload/blob/main/benchmarks/DECODE_OPTIMIZATION.md) for the
   decode research + measured speedups.
 
 ## Storage footprint
 
-![Storage footprint per format](benchmarks/charts/storage.png)
+![Storage footprint per format](https://raw.githubusercontent.com/midhunharikumar/ferroload/main/benchmarks/charts/storage.png)
 
 HF Arrow ≈ raw bytes; **Ferroload is always smaller than WebDataset** (≈2× smaller
 for tiny images — WebDataset pads every tar member and stores a separate `.json`
@@ -60,7 +60,7 @@ meta member per sample, while Ferroload keeps meta in a compact zstd Parquet ind
 
 ## GCS streaming
 
-![GCS streaming throughput before/after](benchmarks/charts/gcs_streaming.png)
+![GCS streaming throughput before/after](https://raw.githubusercontent.com/midhunharikumar/ferroload/main/benchmarks/charts/gcs_streaming.png)
 
 WebDataset streams whole tar shards sequentially (bandwidth-bound). Ferroload's
 decode path originally issued **per-sample ranged GETs** (latency-bound, 113
@@ -71,7 +71,7 @@ WebDataset doesn't have.
 
 ## Two gaps the benchmark exposed — and fixed
 
-![JPEG decode with turbojpeg](benchmarks/charts/jpeg_decode.png)
+![JPEG decode with turbojpeg](https://raw.githubusercontent.com/midhunharikumar/ferroload/main/benchmarks/charts/jpeg_decode.png)
 
 | Fix | Change | Before | After | Δ |
 |---|---|--:|--:|--:|
@@ -93,7 +93,7 @@ pure-Rust).
 - **HF `datasets` (Arrow)** — smallest on disk (raw bytes), good queryable
   metadata, scales with `num_workers`; no tensor-shard / remote-range story.
 
-See [benchmarks/REPORT.md](benchmarks/REPORT.md) for per-worker tables,
+See [benchmarks/REPORT.md](https://github.com/midhunharikumar/ferroload/blob/main/benchmarks/REPORT.md) for per-worker tables,
 first-batch latency, peak RAM, the decoder-isolation analysis, limitations, and
 reproduction steps.
 
