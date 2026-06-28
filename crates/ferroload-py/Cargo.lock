@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "ferroload-codec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fast_image_resize",
  "ffmpeg-next",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "ferroload-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "bytes",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "ferroload-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "ferroload-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ferroload-codec",
  "ferroload-core",

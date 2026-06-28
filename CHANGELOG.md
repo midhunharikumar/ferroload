@@ -5,6 +5,41 @@ All notable changes to Ferroload. Versions are unified across the Rust crates
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-28
+
+### Loader: streaming / iterable access pattern (one knob)
+- New `FerroIterableDataset` — a streaming (`IterableDataset`) **view** over the
+  same `ferroload.Dataset`, alongside the existing map-style `FerroTorchDataset`.
+  It reads contiguous, shard-local blocks sequentially, decodes each block in
+  parallel in Rust, and yields through a `shuffle_buffer` (WebDataset-style
+  approximate shuffle). That's the object-store-friendly access pattern: few large
+  sequential reads instead of many random GETs.
+- Get it via `ds.iterable(...)` (counterpart to `ds.torch()`), or flip
+  `make_loader(..., streaming=True, shuffle_buffer=…, block_size=…)`. Same
+  `Dataset`, columns, decode, and cache — only the iteration strategy differs, so
+  there's no second data pipeline. DDP/worker sharding is automatic (blocks split
+  across `world_size` ranks, then across DataLoader workers); `set_epoch` reshuffles.
+- Map-style (exact shuffle, random `ds[i]`) remains the default; streaming trades
+  exact shuffle for sequential-read throughput on large/cloud datasets.
+
+### Remote (object-store) streaming: `Dataset.open("s3://…")`
+- `Dataset.open` (Python and Rust `Dataset::open_url`) now accepts object-store
+  URLs — `s3://`, `gs://`, `az://`, plus `file://` / `memory://`. Shard bytes are
+  streamed via **ranged GETs** through a content-addressed local cache (default
+  `$FERROLOAD_CACHE` or a temp dir; override with `cache_dir=`/`make_loader(..., cache_dir=)`).
+- The whole read path stays in Rust on a process-wide Tokio runtime, driven from
+  the synchronous, **GIL-released** decode path — so cloud reads aren't GIL-bound.
+  Batched reads group by shard and issue a single coalesced `get_ranges` (few
+  requests, parallelized + cached). The local-filesystem path is unchanged
+  (positional `read_exact_at`), so local performance is unaffected.
+- Credentials/region come from the environment (`AWS_*` / `GOOGLE_*` / `AZURE_*`).
+  The `cloud` feature builds all backends at once (S3 + GCS + Azure; pure-Rust
+  rustls, so portable) and is what the published wheel and `scripts/build-package.sh`
+  ship; `--features aws`/`gcp`/`azure` build a single backend. Base build is local-only.
+- Remote datasets are **read-only** (no `map`/writes) for now. `ferroload-io`
+  gains `Storage::from_url`, a shared blocking runtime, and coalesced cached
+  `get_ranges`; `ferroload-core` gains the feature-gated `remote` backend.
+
 ### Loader: per-column `resize`
 - `resize` now also accepts a per-column dict `{col: (H, W) | None}` (covers image
   and video columns; `None` = no resize for that column), alongside the existing
