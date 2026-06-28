@@ -8,15 +8,14 @@ Organized as a Cargo workspace of focused crates.
 
 ## Quickstart
 
-Build the Python package from source with [maturin](https://www.maturin.rs/) into
-your env:
+Install from PyPI — prebuilt wheels for macOS (arm64), Linux (x86_64 / aarch64),
+and Windows, with S3 / GCS / Azure support included:
 
 ```bash
-pip install maturin
-cd crates/ferroload-py
-maturin develop --release          # add --features cloud for s3:// gs:// az://
-                                   #     --features turbojpeg for libjpeg-turbo decode
+pip install ferroload
 ```
+
+(Building from source / a dev install is in [Build from source](#build-from-source).)
 
 Write a dataset, then open, query, and train on it:
 
@@ -89,11 +88,29 @@ in **[BENCHMARKS.md](BENCHMARKS.md)**.
   WebDataset, while keeping random access + a DuckDB-queryable index.
 - **Storage:** always smaller than WebDataset (≈2× for tiny images).
 
-## Build & test
+## Build from source
+
+A dev (editable) install or a wheel, via [maturin](https://www.maturin.rs/):
+
+```bash
+pip install maturin
+cd crates/ferroload-py
+maturin develop --release          # editable install into the active env
+#   --features cloud      S3 / GCS / Azure backends (in the published wheel)
+#   --features turbojpeg  libjpeg-turbo JPEG decode (needs libjpeg-turbo)
+#   --features video      in-Rust video decode (needs system ffmpeg + clang)
+maturin build   --release          # -> target/wheels/ferroload-*-abi3-*.whl
+python -c "import ferroload; print(ferroload.__version__)"
+ferroload --help                   # CLI is installed too
+```
+
+> macOS note: don't set `strip = true` in `[tool.maturin]` — stripping invalidates
+> the linker's ad-hoc signature on arm64 and makes `import` hang (AMFI/Gatekeeper).
+
+Run the Rust + Python tests:
 
 ```bash
 export CARGO_TARGET_DIR=/tmp/ferro-target   # if the mounted FS blocks cargo's temp deletes
-
 cargo test                                        # core (Parquet index is default) + io + codec
 cargo test -p ferroload-core --features remote    # + remote object-store / ranged reads
 cargo run  -p ferroload-core --example synthetic_av
@@ -102,20 +119,6 @@ cargo run  -p ferroload-core --example synthetic_av
 The core/io/codec unit tests, the integration/combinations/layers suites, and the
 doctest all pass; the Python end-to-end suites live in `python/` (e.g.
 `python/test_map.py`) and the benchmark harness in [`benchmarks/`](benchmarks/).
-
-Python wheel (abi3) via maturin:
-
-```bash
-cd crates/ferroload-py
-maturin build --release            # -> target/wheels/ferroload-*-abi3-*.whl  (pip install it)
-#   --features video      in-Rust video decode (needs system ffmpeg + clang)
-#   --features turbojpeg  libjpeg-turbo JPEG decode (needs libjpeg-turbo)
-python -c "import ferroload; print(ferroload.__version__)"
-ferroload --help                   # CLI is installed too
-```
-
-> macOS note: don't set `strip = true` in `[tool.maturin]` — stripping invalidates
-> the linker's ad-hoc signature on arm64 and makes `import` hang (AMFI/Gatekeeper).
 
 ## Workspace layout
 

@@ -1,23 +1,33 @@
 # Installation
 
-Ferroload is a Cargo workspace of Rust crates with a maturin-built Python
-extension (`ferroload._core`). For Python use you build and install that wheel;
-for Rust use you depend on `ferroload-core` directly.
+Ferroload ships **prebuilt Python wheels on PyPI** — that's the normal install. For
+development you can build the maturin extension from source; for Rust use you depend
+on `ferroload-core` directly.
 
-## Python package
+## Install (PyPI)
 
-It's a maturin mixed package — build and install it into a fresh virtualenv or
-conda env:
+Prebuilt wheels for macOS (arm64), Linux (x86_64 / aarch64), and Windows, with
+S3 / GCS / Azure backends included:
+
+```bash
+pip install ferroload
+
+python -c "import ferroload; print(ferroload.__version__)"
+ferroload --help                   # the CLI is installed too
+```
+
+## Build from source
+
+It's a maturin mixed package — build it into a fresh virtualenv or conda env (only
+needed for development, unreleased changes, or optional features like `turbojpeg`/
+`video` below):
 
 ```bash
 cd crates/ferroload-py
 pip install maturin
-maturin develop --release          # dev install into the active env
+maturin develop --release          # editable install into the active env
 # or build a wheel to pip-install elsewhere:
 maturin build --release            # -> target/wheels/ferroload-*-abi3-*.whl
-
-python -c "import ferroload; print(ferroload.__version__)"
-ferroload --help                   # the CLI is installed too
 ```
 
 !!! note "Build target on a mounted/output filesystem"
@@ -83,8 +93,8 @@ Credentials come from the environment (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`
 Build and test the workspace directly:
 
 ```bash
-cargo test                                       # core + io + codec
-cargo test -p ferroload-core --features parquet  # + the parquet/arrow index backend
+cargo test                                       # core (Parquet index is default) + io + codec
+cargo test -p ferroload-core --features remote   # + remote object-store / ranged reads
 cargo run  -p ferroload-core --example synthetic_av
 ```
 
