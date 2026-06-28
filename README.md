@@ -176,8 +176,7 @@ those are present.
 
 ## Documentation
 
-Built with MkDocs (Material) and deployed to GitHub Pages — see [`docs/`](docs/) or
-run `pip install -r requirements-docs.txt && mkdocs serve`. It covers the
+See [`docs/`](docs/): the
 [Python API](docs/python/api.md), the
 [HuggingFace + CLI quickstart](docs/python/quickstart.md),
 [Rust core usage](docs/rust/usage.md), and [benchmarks](docs/benchmarks.md). There's
