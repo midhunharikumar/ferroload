@@ -57,24 +57,23 @@ class _IndexRemap:
 
 
 def _to_torch(sample: dict) -> dict:
+    import numpy as np
     import torch
     out = {}
     for k, v in sample.items():
-        if hasattr(v, "dtype") and hasattr(v, "shape"):   # numpy array
-            out[k] = torch.from_numpy(v)
-        else:
-            out[k] = v
+        # Only real ndarrays go through from_numpy; numpy/py scalars (e.g. an int64
+        # meta column) pass through for the collate_fn to batch (from_numpy rejects
+        # 0-d numpy scalars).
+        out[k] = torch.from_numpy(v) if isinstance(v, np.ndarray) else v
     return out
 
 
 def _to_jax(sample: dict) -> dict:
     import jax.numpy as jnp
+    import numpy as np
     out = {}
     for k, v in sample.items():
-        if hasattr(v, "dtype") and hasattr(v, "shape"):   # numpy array
-            out[k] = jnp.asarray(v)
-        else:
-            out[k] = v
+        out[k] = jnp.asarray(v) if isinstance(v, np.ndarray) else v
     return out
 
 
