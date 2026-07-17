@@ -1,9 +1,8 @@
 site_name: Ferroload
 site_description: A pure-Rust multimodal dataset format + dataloader for PyTorch
-# TODO: set these to your GitHub org/user once the repo is public.
-site_url: https://USERNAME.github.io/ferroload-rs/
-repo_url: https://github.com/USERNAME/ferroload-rs
-repo_name: ferroload-rs
+site_url: https://midhunharikumar.github.io/ferroload/
+repo_url: https://github.com/midhunharikumar/ferroload
+repo_name: ferroload
 edit_uri: edit/main/docs/
 
 theme:
