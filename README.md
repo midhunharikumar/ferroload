@@ -183,7 +183,9 @@ See [`docs/`](docs/): the
 [Python API](docs/python/api.md), the
 [HuggingFace + CLI quickstart](docs/python/quickstart.md),
 [Rust core usage](docs/rust/usage.md), and [benchmarks](docs/benchmarks.md). There's
-also a runnable `notebooks/ferroload_demo.ipynb` walkthrough, and design/API notes
+also a runnable `notebooks/ferroload_demo.ipynb` walkthrough, end-to-end training
+samples in [`samples/`](samples/) (e.g. bitwise-deterministic image+text training
+on Modal), and design/API notes
 at the repo root (`DESIGN.md`, `PYTHON_API.md`, `EXAMPLES.md`, `API_REVIEW.md`,
 `PERF_REVIEW.md`).
 
