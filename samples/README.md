@@ -6,4 +6,4 @@ End-to-end example training code built on the `ferroload` Python package
 
 | Sample | What it shows |
 |---|---|
-| [`image_text_determinism/`](image_text_determinism/) | Mini-CLIP contrastive training on Flickr30k (image + caption pairs) with **bitwise-identical loss curves** across independent runs — the loader's deterministic sampling, end to end. Runs on [Modal](https://modal.com). |
+| [`image_text_determinism/`](image_text_determinism/) | Mini-CLIP contrastive training on Flickr30k (image + caption pairs) with **bitwise-identical loss curves** across independent runs — the loader's deterministic sampling, end to end. Includes a DDP variant covering multi-GPU and multi-node (Modal clusters), asserting per-rank and all-reduced global losses. Runs on [Modal](https://modal.com). |
