@@ -1,5 +1,11 @@
 # ferroload-rs
 
+[![release](https://github.com/midhunharikumar/ferroload/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/midhunharikumar/ferroload/actions/workflows/release.yml)
+[![docs](https://github.com/midhunharikumar/ferroload/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/midhunharikumar/ferroload/actions/workflows/docs.yml)
+[![PyPI](https://img.shields.io/pypi/v/ferroload)](https://pypi.org/project/ferroload/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://pypi.org/project/ferroload/)
+[![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](https://www.apache.org/licenses/LICENSE-2.0)
+
 Pure-Rust implementation of the **Ferroload** multimodal dataset format and
 runtime, plus Python bindings. A fast, cloud-native dataset format for ML
 training: sharded tar data with a **columnar, DuckDB-queryable Parquet index**,
@@ -183,7 +189,9 @@ See [`docs/`](docs/): the
 [Python API](docs/python/api.md), the
 [HuggingFace + CLI quickstart](docs/python/quickstart.md),
 [Rust core usage](docs/rust/usage.md), and [benchmarks](docs/benchmarks.md). There's
-also a runnable `notebooks/ferroload_demo.ipynb` walkthrough, and design/API notes
+also a runnable `notebooks/ferroload_demo.ipynb` walkthrough, end-to-end training
+samples in [`samples/`](samples/) (e.g. bitwise-deterministic image+text training
+on Modal), and design/API notes
 at the repo root (`DESIGN.md`, `PYTHON_API.md`, `EXAMPLES.md`, `API_REVIEW.md`,
 `PERF_REVIEW.md`).
 
